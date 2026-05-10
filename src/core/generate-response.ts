@@ -1,0 +1,161 @@
+import type { Db } from '../db/kysely.js';
+import type { GhlClient } from '../ghl/client.js';
+import type { LlmClient } from '../llm/client.js';
+import type { Salon } from './types.js';
+import * as conversationsRepo from '../db/repos/conversations.js';
+import * as messagesRepo from '../db/repos/messages.js';
+import * as eventsRepo from '../db/repos/events.js';
+import { sanitize } from '../sanitizer/index.js';
+import { buildPrompt } from '../prompt/build.js';
+import { allTools } from '../prompt/tools.js';
+import { escalateToOwner } from './escalate.js';
+import { SanitizerEmptyOutputError } from '../lib/errors.js';
+import { logger } from '../lib/logger.js';
+
+const ALLOWED_STATE_KEYS = ['client_is_hesitant', 'last_quoted_service'] as const;
+
+export interface GenerateResponseDeps {
+  db: Db;
+  ghl: GhlClient;
+  llm: LlmClient;
+}
+
+export async function generateResponse(deps: GenerateResponseDeps, salon: Salon, conversationId: string): Promise<void> {
+  const ctx = await conversationsRepo.loadContext(deps.db, conversationId, 15);
+
+  if (ctx.conversation.handoffUntil && ctx.conversation.handoffUntil > new Date()) {
+    logger.info({ conversationId }, 'handoff active at worker; skipping');
+    return;
+  }
+
+  const bookingLinkRecentlySent = await eventsRepo.recentBookingLinkSent(
+    deps.db,
+    conversationId,
+    salon.config.booking_link_dedup_window,
+  );
+  const prompt = buildPrompt(salon, ctx, bookingLinkRecentlySent);
+
+  let llmResult: Awaited<ReturnType<typeof deps.llm.complete>>;
+  let attempts = 0;
+  while (true) {
+    try {
+      llmResult = await deps.llm.complete({
+        systemPrompt: prompt.systemPrompt,
+        messages: prompt.messages,
+        tools: allTools,
+        model: salon.config.llm_model,
+        maxTokens: 512,
+      });
+      break;
+    } catch (err) {
+      attempts++;
+      logger.warn({ err, attempts, conversationId }, 'llm.complete failed; retrying');
+      if (attempts >= 3) {
+        await escalateToOwner({
+          db: deps.db,
+          ghl: deps.ghl,
+          salon,
+          conversation: ctx.conversation,
+          reason: 'llm_failed',
+        });
+        return;
+      }
+      const backoff = 500 * 2 ** attempts;
+      await new Promise((r) => setTimeout(r, backoff));
+    }
+  }
+
+  let escalated = false;
+  let linkSentToolCalled = false;
+  for (const call of llmResult.toolCalls) {
+    if (call.name === 'escalate_to_owner') {
+      const reason = (call.arguments.reason as string | undefined) ?? 'unspecified';
+      const summary = call.arguments.context_summary as string | undefined;
+      await escalateToOwner({
+        db: deps.db,
+        ghl: deps.ghl,
+        salon,
+        conversation: ctx.conversation,
+        reason,
+        contextSummary: summary,
+      });
+      escalated = true;
+      break;
+    } else if (call.name === 'mark_link_sent') {
+      await eventsRepo.insert(deps.db, conversationId, 'booking_link_sent', {});
+      linkSentToolCalled = true;
+    } else if (call.name === 'set_state_flag') {
+      const key = call.arguments.key as string | undefined;
+      const value = call.arguments.value;
+      if (key && (ALLOWED_STATE_KEYS as readonly string[]).includes(key)) {
+        await conversationsRepo.mergeState(deps.db, conversationId, { [key]: value });
+      } else {
+        logger.warn({ conversationId, key }, 'rejected unknown state flag');
+      }
+    }
+  }
+  if (escalated) return;
+
+  let sanitized: Awaited<ReturnType<typeof sanitize>>;
+  try {
+    sanitized = await sanitize(llmResult.text, {
+      bookingLink: salon.sourceOfTruth.salon.booking_link,
+      bookingLinkSentInLastN: (n) => eventsRepo.recentBookingLinkSent(deps.db, conversationId, n),
+      policy: {
+        maxWordsPerMessage: salon.config.max_words_per_message,
+        maxEmojis: salon.config.max_emojis,
+        bookingLinkDedupWindow: salon.config.booking_link_dedup_window,
+      },
+    });
+  } catch (err) {
+    if (err instanceof SanitizerEmptyOutputError) {
+      await escalateToOwner({
+        db: deps.db,
+        ghl: deps.ghl,
+        salon,
+        conversation: ctx.conversation,
+        reason: 'sanitizer_empty_output',
+      });
+      return;
+    }
+    throw err;
+  }
+
+  for (const message of sanitized.messages) {
+    try {
+      const sent = await deps.ghl.sendMessage({
+        contactId: ctx.conversation.ghlContactId,
+        type: 'IG',
+        message,
+      });
+      await messagesRepo.insertOutbound(deps.db, {
+        conversationId,
+        textContent: message,
+        aiRawOutput: llmResult.text,
+        sanitizeMods: sanitized.modifications,
+        promptTokens: llmResult.usage.inputTokens,
+        completionTokens: llmResult.usage.outputTokens,
+        costUsd: null,
+        ghlMessageId: sent.ghlMessageId,
+      });
+    } catch (err) {
+      logger.error({ err, conversationId }, 'ghl sendMessage failed');
+      await escalateToOwner({
+        db: deps.db,
+        ghl: deps.ghl,
+        salon,
+        conversation: ctx.conversation,
+        reason: 'cannot_reply_outside_window',
+      });
+      return;
+    }
+  }
+
+  // Defense in depth: ensure booking_link_sent event exists if link is in output.
+  if (!linkSentToolCalled) {
+    const containsLink = sanitized.messages.some((m) => m.includes(salon.sourceOfTruth.salon.booking_link));
+    if (containsLink) {
+      await eventsRepo.insert(deps.db, conversationId, 'booking_link_sent', {});
+    }
+  }
+}

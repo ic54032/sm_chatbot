@@ -4,8 +4,7 @@ import type { LlmClient } from '../llm/client.js';
 import * as salonsRepo from '../db/repos/salons.js';
 import * as conversationsRepo from '../db/repos/conversations.js';
 import * as messagesRepo from '../db/repos/messages.js';
-import * as eventsRepo from '../db/repos/events.js';
-import { sanitize } from '../sanitizer/index.js';
+import { generateResponse } from './generate-response.js';
 import { logger } from '../lib/logger.js';
 
 export interface HandleInboundInput {
@@ -36,7 +35,7 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
     textContent = fetched.text;
   }
   if (!textContent) {
-    logger.warn({ locationId: input.locationId, contactId: input.contactId }, 'inbound has no text content; dropping');
+    logger.warn({ locationId: input.locationId, contactId: input.contactId }, 'inbound has no text; dropping');
     return;
   }
 
@@ -61,36 +60,6 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
     return;
   }
 
-  // Korak 1: synchronous stub respond (replaced with BullMQ in Korak 5).
-  const llmResult = await deps.llm.complete({
-    systemPrompt: 'You are a hair salon receptionist. Reply briefly.',
-    messages: [{ role: 'user', content: textContent }],
-    tools: [],
-    model: salon.config.llm_model,
-    maxTokens: 256,
-  });
-
-  const sanitized = await sanitize(llmResult.text, {
-    bookingLink: salon.sourceOfTruth.salon.booking_link,
-    bookingLinkSentInLastN: (n) => eventsRepo.recentBookingLinkSent(deps.db, conversation.id, n),
-    policy: {
-      maxWordsPerMessage: salon.config.max_words_per_message,
-      maxEmojis: salon.config.max_emojis,
-      bookingLinkDedupWindow: salon.config.booking_link_dedup_window,
-    },
-  });
-
-  for (const message of sanitized.messages) {
-    const sent = await deps.ghl.sendMessage({ contactId: input.contactId, type: 'IG', message });
-    await messagesRepo.insertOutbound(deps.db, {
-      conversationId: conversation.id,
-      textContent: message,
-      aiRawOutput: llmResult.text,
-      sanitizeMods: sanitized.modifications,
-      promptTokens: llmResult.usage.inputTokens,
-      completionTokens: llmResult.usage.outputTokens,
-      costUsd: null,
-      ghlMessageId: sent.ghlMessageId,
-    });
-  }
+  // Korak 4: synchronous direct call. Replaced with BullMQ scheduling in Korak 5.
+  await generateResponse(deps, salon, conversation.id);
 }
