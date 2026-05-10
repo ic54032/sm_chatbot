@@ -101,3 +101,32 @@ describe('sanitizer — word count split', () => {
     expect(result.modifications).toContain('split_into_multiple');
   });
 });
+
+describe('sanitizer — bug regressions', () => {
+  it('strips trailing period from captured URL (dedup recognizes link with sentence period)', async () => {
+    const result = await sanitize('Book at https://example.com/book.', {
+      ...baseCtx,
+      bookingLinkSentInLastN: async () => true,
+    });
+    // Booking link should be stripped because it was recognized despite trailing period
+    expect(result.messages[0]).not.toContain('https://example.com/book');
+    expect(result.modifications).toContain('booking_link_deduplicated');
+  });
+
+  it('does not substring-match similar URLs (booking="https://example.com/book" vs "https://example.com/booking-info")', async () => {
+    const result = await sanitize(
+      'See https://example.com/booking-info and https://example.com/book',
+      baseCtx,
+    );
+    // The exact booking link must be the kept one, not the substring superset
+    expect(result.messages[0]).toContain('https://example.com/book');
+    expect(result.messages[0]).not.toContain('https://example.com/booking-info');
+    expect(result.modifications).toContain('extra_links_stripped');
+  });
+
+  it('preserves URL containing semicolon (jsessionid pattern not mutated by char scrub)', async () => {
+    const result = await sanitize('Visit https://example.com/path;jsessionid=abc here', baseCtx);
+    expect(result.messages[0]).toContain('https://example.com/path;jsessionid=abc');
+    expect(result.messages[0]).not.toContain(',jsessionid');
+  });
+});
