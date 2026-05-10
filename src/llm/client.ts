@@ -45,7 +45,7 @@ export class AnthropicLlmClient implements LlmClient {
   private client: Anthropic;
 
   constructor(apiKey: string) {
-    this.client = new Anthropic({ apiKey, timeout: 30_000, maxRetries: 2 });
+    this.client = new Anthropic({ apiKey, timeout: 30_000, maxRetries: 0 });
   }
 
   async complete(input: LlmCompleteInput): Promise<LlmCompleteOutput> {

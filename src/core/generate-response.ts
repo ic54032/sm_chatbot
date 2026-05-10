@@ -82,7 +82,6 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
       escalated = true;
       break;
     } else if (call.name === 'mark_link_sent') {
-      await eventsRepo.insert(deps.db, conversationId, 'booking_link_sent', {});
       linkSentToolCalled = true;
     } else if (call.name === 'set_state_flag') {
       const key = call.arguments.key as string | undefined;
@@ -151,11 +150,11 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
     }
   }
 
-  // Defense in depth: ensure booking_link_sent event exists if link is in output.
-  if (!linkSentToolCalled) {
-    const containsLink = sanitized.messages.some((m) => m.includes(salon.sourceOfTruth.salon.booking_link));
-    if (containsLink) {
-      await eventsRepo.insert(deps.db, conversationId, 'booking_link_sent', {});
-    }
+  // Record booking_link_sent event AFTER successful send so the dedup window starts
+  // from the next turn, not the current one. Either the LLM declared intent via
+  // mark_link_sent or post-sanitize scan found the link in final output.
+  const containsLink = sanitized.messages.some((m) => m.includes(salon.sourceOfTruth.salon.booking_link));
+  if (linkSentToolCalled || containsLink) {
+    await eventsRepo.insert(deps.db, conversationId, 'booking_link_sent', {});
   }
 }

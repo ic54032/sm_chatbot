@@ -26,13 +26,18 @@ export async function escalateToOwner(input: EscalateInput): Promise<void> {
 
   try {
     await input.ghl.addTag(input.conversation.ghlContactId, ['escalation_active']);
+  } catch (err) {
+    logger.error({ err, conversationId: input.conversation.id }, 'ghl addTag failed during escalate');
+  }
+
+  try {
     await input.ghl.updateCustomField({
       contactId: input.conversation.ghlContactId,
       fieldId: input.salon.config.ghl_custom_field_ids.last_escalation_reason,
       value: input.reason,
     });
   } catch (err) {
-    logger.error({ err, conversationId: input.conversation.id }, 'ghl side-effect during escalate failed');
+    logger.error({ err, conversationId: input.conversation.id }, 'ghl updateCustomField failed during escalate');
   }
 
   logger.info({ conversationId: input.conversation.id, reason: input.reason, handoffUntil }, 'escalated to owner');

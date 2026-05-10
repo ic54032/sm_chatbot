@@ -12,13 +12,26 @@ export async function insert(db: Db, conversationId: string, eventType: string, 
 }
 
 export async function recentBookingLinkSent(db: Db, conversationId: string, withinLastN: number): Promise<boolean> {
-  const recent = await db
+  const cutoffRow = await db
+    .selectFrom('messages')
+    .where('conversation_id', '=', conversationId)
+    .where('direction', '=', 'outbound')
+    .orderBy('created_at', 'desc')
+    .offset(withinLastN - 1)
+    .limit(1)
+    .select('created_at')
+    .executeTakeFirst();
+
+  const cutoff = cutoffRow?.created_at ?? new Date(0);
+
+  const found = await db
     .selectFrom('conversation_events')
     .where('conversation_id', '=', conversationId)
     .where('event_type', '=', 'booking_link_sent')
-    .orderBy('created_at', 'desc')
-    .limit(withinLastN)
+    .where('created_at', '>=', cutoff)
+    .limit(1)
     .select('id')
-    .execute();
-  return recent.length > 0;
+    .executeTakeFirst();
+
+  return !!found;
 }
