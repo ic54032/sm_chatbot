@@ -1,22 +1,19 @@
-import { Kysely, Migrator, PostgresDialect, FileMigrationProvider, sql } from 'kysely';
-import { promises as fs } from 'node:fs';
-import * as path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { Kysely, Migrator, PostgresDialect, sql, type Migration, type MigrationProvider } from 'kysely';
 import pg from 'pg';
 import type { Database } from '../../src/db/schema.js';
+import * as migration0001 from '../../src/db/migrations/0001_initial.js';
 
 const TEST_DB_URL =
   process.env.TEST_DATABASE_URL ?? 'postgres://salon:salon@localhost:55432/salon_test';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Windows ESM workaround: same as src/db/migrate.ts. FileMigrationProvider passes
-// joined Windows paths to import() which Node ESM rejects without file:// scheme.
-const urlPath = {
-  ...path,
-  join: (...parts: string[]): string => {
-    const joined = path.join(...parts);
-    return pathToFileURL(joined).href;
+// Static migration provider — avoids kysely FileMigrationProvider's dynamic import()
+// of .ts files at runtime, which Node ESM rejects in CI (no TS loader registered).
+// Statically imported modules are transformed by vitest like any other source file.
+const staticProvider: MigrationProvider = {
+  async getMigrations(): Promise<Record<string, Migration>> {
+    return {
+      '0001_initial': migration0001 as Migration,
+    };
   },
 };
 
@@ -32,11 +29,7 @@ export async function migrateTestDb(): Promise<void> {
   const db = createTestDb();
   const migrator = new Migrator({
     db: db as unknown as Kysely<unknown>,
-    provider: new FileMigrationProvider({
-      fs,
-      path: urlPath,
-      migrationFolder: path.resolve(__dirname, '../../src/db/migrations'),
-    }),
+    provider: staticProvider,
   });
   const { error, results } = await migrator.migrateToLatest();
   if (error) {
