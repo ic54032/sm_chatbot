@@ -21,8 +21,14 @@ export async function setupAutoResume(deps: {
 }): Promise<AutoResumeSetup> {
   const queue = new Queue(AUTO_RESUME_QUEUE, { connection: deps.connection });
 
-  // Idempotent recurring schedule. BullMQ deduplicates repeat jobs by
-  // (name, repeat options); calling on each startup leaves a single scheduled job.
+  // Recurring schedule. BullMQ keys repeat schedulers by (job name + repeat options).
+  // Calling on each startup with IDENTICAL options is idempotent (BullMQ skips re-creating).
+  //
+  // CAVEAT: if AUTO_RESUME_INTERVAL_MS changes, BullMQ creates a NEW scheduler under a
+  // different key while the OLD one persists in Redis until manually removed. To change
+  // the interval safely: stop all instances, FLUSHDB the Redis (or use removeRepeatable
+  // CLI), then restart with new interval. V2 migration target: queue.upsertJobScheduler
+  // (BullMQ 5.10+) which is fully idempotent.
   await queue.add(
     'auto-resume-tick',
     {},

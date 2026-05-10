@@ -56,11 +56,16 @@ export async function markResumed(db: Db, escalationId: string, resumedBy: 'auto
     .execute();
 }
 
-export async function markResumedByConversation(db: Db, conversationId: string, resumedBy: 'auto_timeout' | 'owner_manual'): Promise<void> {
-  await db
+export async function markResumedByConversation(
+  db: Db,
+  conversationId: string,
+  resumedBy: 'auto_timeout' | 'owner_manual',
+): Promise<number> {
+  const result = await db
     .updateTable('escalations')
     .set({ resumed_at: new Date(), resumed_by: resumedBy })
     .where('conversation_id', '=', conversationId)
     .where('resumed_at', 'is', null)
-    .execute();
+    .executeTakeFirst();
+  return Number(result.numUpdatedRows ?? 0);
 }

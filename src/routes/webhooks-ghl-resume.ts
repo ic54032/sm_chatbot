@@ -40,10 +40,19 @@ export async function resumeWebhookRoute(app: FastifyInstance): Promise<void> {
           logger.warn({ contactId: parsed.data.contact_id }, 'resume: conversation not found');
           return;
         }
-        await conversationsRepo.setHandoffUntil(app.deps.db, conv.id, null);
-        await escalationsRepo.markResumedByConversation(app.deps.db, conv.id, 'owner_manual');
-        await eventsRepo.insert(app.deps.db, conv.id, 'bot_resumed', { by: 'owner_manual' });
-        logger.info({ conversationId: conv.id }, 'manual resume completed');
+        const updated = await app.deps.db.transaction().execute(async (tx) => {
+          await conversationsRepo.setHandoffUntil(tx, conv.id, null);
+          const rowsMarked = await escalationsRepo.markResumedByConversation(tx, conv.id, 'owner_manual');
+          if (rowsMarked > 0) {
+            await eventsRepo.insert(tx, conv.id, 'bot_resumed', { by: 'owner_manual' });
+          }
+          return rowsMarked;
+        });
+        if (updated > 0) {
+          logger.info({ conversationId: conv.id }, 'manual resume completed');
+        } else {
+          logger.info({ conversationId: conv.id }, 'manual resume webhook fired but no active escalation; no-op');
+        }
       } catch (err) {
         logger.error({ err }, 'resume webhook handler failed');
       }
