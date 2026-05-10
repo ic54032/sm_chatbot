@@ -10,6 +10,7 @@ import { logger } from './lib/logger.js';
 import { inboundWebhookRoute } from './routes/webhooks-ghl-inbound.js';
 import { devSimulateRoute } from './routes/dev-simulate.js';
 import { adminSalonsRoute } from './routes/admin-salons.js';
+import { resumeWebhookRoute } from './routes/webhooks-ghl-resume.js';
 import { createConnection, createRespondQueue, redisConnectionOptions, type RespondJobData } from './queue/index.js';
 import { buildRespondWorker } from './workers/respond.js';
 import type { Redis } from 'ioredis';
@@ -42,6 +43,7 @@ async function main() {
   await app.register(inboundWebhookRoute);
   await app.register(devSimulateRoute);
   await app.register(adminSalonsRoute);
+  await app.register(resumeWebhookRoute);
 
   app.setErrorHandler((err, _req, reply) => {
     logger.error({ err }, 'unhandled error');
