@@ -1,0 +1,32 @@
+{
+  "display_name": "Bella Hair Studio",
+  "ghl_location_id": "loc_bella_test",
+  "ghl_pit": "test-pit",
+  "source_of_truth": {
+    "salon": {
+      "name": "Bella Hair Studio",
+      "owner_first_name": "Sarah",
+      "location": "Toronto, ON",
+      "timezone": "America/Toronto",
+      "hours": { "mon": "closed", "tue": "10:00-19:00" },
+      "booking_link": "https://bellahair.example.com/book"
+    },
+    "stylists": [{ "name": "Sarah", "specialties": ["balayage"] }],
+    "services": [
+      {
+        "name": "Balayage",
+        "price_range": { "min": 250, "max": 400, "currency": "CAD" },
+        "requires_consultation": true
+      }
+    ],
+    "voice": { "tone_notes": "Warm, casual" }
+  },
+  "config": {
+    "response_delay_ms": 100,
+    "ghl_custom_field_ids": {
+      "needs_owner_attention": "field_attn",
+      "bot_paused_until": "field_paused",
+      "last_escalation_reason": "field_reason"
+    }
+  }
+}
