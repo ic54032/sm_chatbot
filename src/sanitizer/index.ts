@@ -28,6 +28,24 @@ export async function sanitize(raw: string, ctx: SanitizeContext): Promise<Sanit
     .trim();
   if (text !== beforeScrub) mods.push('forbidden_chars_scrubbed');
 
+  const linkRe = /https?:\/\/\S+/g;
+  const links = [...text.matchAll(linkRe)].map((m) => m[0]);
+  if (links.length > 1) {
+    const keep = links.find((l) => l.includes(ctx.bookingLink)) ?? links[0];
+    for (const link of links) {
+      if (link !== keep) text = text.replace(link, '');
+    }
+    text = text.replace(/\s+/g, ' ').trim();
+    mods.push('extra_links_stripped');
+  }
+
+  if (text.includes(ctx.bookingLink)) {
+    if (await ctx.bookingLinkSentInLastN(ctx.policy.bookingLinkDedupWindow)) {
+      text = text.replace(ctx.bookingLink, '').replace(/\s+/g, ' ').trim();
+      mods.push('booking_link_deduplicated');
+    }
+  }
+
   const emojiRe = /\p{Extended_Pictographic}/gu;
   const emojiMatches = [...text.matchAll(emojiRe)];
   if (emojiMatches.length > ctx.policy.maxEmojis) {

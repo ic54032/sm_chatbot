@@ -45,3 +45,36 @@ describe('sanitizer — emoji cap', () => {
     expect(result.modifications).not.toContain('emojis_capped');
   });
 });
+
+describe('sanitizer — links', () => {
+  it('keeps booking link when multiple links present', async () => {
+    const result = await sanitize(
+      'Check https://example.com/book or https://other.com',
+      baseCtx,
+    );
+    expect(result.messages[0]).toContain('https://example.com/book');
+    expect(result.messages[0]).not.toContain('https://other.com');
+    expect(result.modifications).toContain('extra_links_stripped');
+  });
+
+  it('keeps first link when no booking link present', async () => {
+    const result = await sanitize('See https://a.com and https://b.com', baseCtx);
+    expect(result.messages[0]).toContain('https://a.com');
+    expect(result.messages[0]).not.toContain('https://b.com');
+  });
+
+  it('removes booking link if recently sent', async () => {
+    const result = await sanitize('Book here https://example.com/book today', {
+      ...baseCtx,
+      bookingLinkSentInLastN: async () => true,
+    });
+    expect(result.messages[0]).not.toContain('https://example.com/book');
+    expect(result.modifications).toContain('booking_link_deduplicated');
+  });
+
+  it('keeps booking link when not recently sent', async () => {
+    const result = await sanitize('Book here https://example.com/book today', baseCtx);
+    expect(result.messages[0]).toContain('https://example.com/book');
+    expect(result.modifications).not.toContain('booking_link_deduplicated');
+  });
+});
