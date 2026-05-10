@@ -4,7 +4,7 @@ import { loadConfig } from './config.js';
 import { createKyselyDb } from './db/kysely.js';
 import { MockGhlClient } from './ghl/mock.js';
 import type { GhlClient } from './ghl/client.js';
-import { StubLlmClient } from './llm/client.js';
+import { AnthropicLlmClient } from './llm/client.js';
 import type { LlmClient } from './llm/client.js';
 import { logger } from './lib/logger.js';
 import { inboundWebhookRoute } from './routes/webhooks-ghl-inbound.js';
@@ -15,7 +15,7 @@ async function main() {
   const cfg = loadConfig();
   const db = createKyselyDb(cfg.databaseUrl);
   const redis = new Redis(cfg.redisUrl);
-  const llm: LlmClient = new StubLlmClient();
+  const llm: LlmClient = new AnthropicLlmClient(cfg.anthropicApiKey);
   const ghl: GhlClient = new MockGhlClient(db);
 
   const app = Fastify({ logger: false });
