@@ -1,4 +1,5 @@
 import { Worker, type ConnectionOptions } from 'bullmq';
+import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import type { Db } from '../db/kysely.js';
 import type { GhlClient } from '../ghl/client.js';
@@ -7,6 +8,19 @@ import * as salonsRepo from '../db/repos/salons.js';
 import { generateResponse } from '../core/generate-response.js';
 import type { RespondJobData } from '../queue/index.js';
 import { logger } from '../lib/logger.js';
+
+const LOCK_TTL_SECONDS = 180;
+
+// Conditional release: only delete the lock if we still own it.
+// Prevents an expired-lock-takeover scenario where worker A's `finally`
+// would otherwise delete worker B's freshly acquired lock.
+const RELEASE_LOCK_LUA = `
+if redis.call("get", KEYS[1]) == ARGV[1] then
+  return redis.call("del", KEYS[1])
+else
+  return 0
+end
+`;
 
 export interface BuildRespondWorkerDeps {
   db: Db;
@@ -22,7 +36,9 @@ export function buildRespondWorker(deps: BuildRespondWorkerDeps): Worker<Respond
     'respond',
     async (job) => {
       const lockKey = `conversation:${job.data.conversationId}:lock`;
-      const acquired = await deps.redis.set(lockKey, job.id ?? 'job', 'EX', 60, 'NX');
+      const lockToken = randomUUID();
+
+      const acquired = await deps.redis.set(lockKey, lockToken, 'EX', LOCK_TTL_SECONDS, 'NX');
       if (acquired !== 'OK') {
         logger.info({ conversationId: job.data.conversationId }, 'lock not acquired; another worker is handling');
         return;
@@ -39,7 +55,10 @@ export function buildRespondWorker(deps: BuildRespondWorkerDeps): Worker<Respond
           job.data.conversationId,
         );
       } finally {
-        await deps.redis.del(lockKey);
+        // Only release if we still own the lock (token match).
+        await deps.redis.eval(RELEASE_LOCK_LUA, 1, lockKey, lockToken).catch((err) => {
+          logger.warn({ err, conversationId: job.data.conversationId }, 'lock release failed');
+        });
       }
     },
     { connection: deps.connection, concurrency: 4 },
