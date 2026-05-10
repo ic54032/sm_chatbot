@@ -15,11 +15,31 @@ export interface SanitizeResult {
   modifications: string[];
 }
 
-/** Korak 1 stub: identity passthrough. Replaced with full pipeline in Korak 2. */
-export async function sanitize(raw: string, _ctx: SanitizeContext): Promise<SanitizeResult> {
-  const text = raw.trim();
-  if (text.length === 0) {
-    throw new SanitizerEmptyOutputError(raw, []);
+export async function sanitize(raw: string, ctx: SanitizeContext): Promise<SanitizeResult> {
+  const mods: string[] = [];
+  let text = raw.trim();
+
+  const beforeScrub = text;
+  text = text
+    .replace(/[—–]/g, '-')
+    .replace(/[…]/g, '')
+    .replace(/;/g, ',')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (text !== beforeScrub) mods.push('forbidden_chars_scrubbed');
+
+  const emojiRe = /\p{Extended_Pictographic}/gu;
+  const emojiMatches = [...text.matchAll(emojiRe)];
+  if (emojiMatches.length > ctx.policy.maxEmojis) {
+    let kept = 0;
+    text = text.replace(emojiRe, (m) => (kept++ < ctx.policy.maxEmojis ? m : ''));
+    text = text.replace(/\s+/g, ' ').trim();
+    mods.push('emojis_capped');
   }
-  return { messages: [text], modifications: [] };
+
+  if (text.length === 0) {
+    throw new SanitizerEmptyOutputError(raw, mods);
+  }
+
+  return { messages: [text], modifications: mods };
 }
