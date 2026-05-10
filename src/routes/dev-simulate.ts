@@ -44,6 +44,7 @@ export async function devSimulateRoute(app: FastifyInstance): Promise<void> {
             ghl: app.deps.ghl,
             llm: app.deps.llm,
             defaultLlmModel: app.deps.defaultLlmModel,
+            respondQueue: app.deps.respondQueue,
           },
           {
             locationId: data.location_id,

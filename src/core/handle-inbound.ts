@@ -1,10 +1,11 @@
+import type { Queue } from 'bullmq';
 import type { Db } from '../db/kysely.js';
 import type { GhlClient } from '../ghl/client.js';
 import type { LlmClient } from '../llm/client.js';
 import * as salonsRepo from '../db/repos/salons.js';
 import * as conversationsRepo from '../db/repos/conversations.js';
 import * as messagesRepo from '../db/repos/messages.js';
-import { generateResponse } from './generate-response.js';
+import type { RespondJobData } from '../queue/index.js';
 import { logger } from '../lib/logger.js';
 
 export interface HandleInboundInput {
@@ -21,6 +22,8 @@ export interface HandleInboundDeps {
   ghl: GhlClient;
   llm: LlmClient;
   defaultLlmModel: string;
+  respondQueue: Queue<RespondJobData>;
+  responseDelayMsOverride?: number;
 }
 
 export async function handleInbound(deps: HandleInboundDeps, input: HandleInboundInput): Promise<void> {
@@ -61,6 +64,17 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
     return;
   }
 
-  // Korak 4: synchronous direct call. Replaced with BullMQ scheduling in Korak 5.
-  await generateResponse(deps, salon, conversation.id);
+  // Rolling-delay coalescing: remove pending job (if any) and schedule fresh.
+  // BullMQ semantics: queue.add with same jobId on a delayed/waiting job is a no-op
+  // and keeps the existing timer. To reset the timer when a new inbound arrives,
+  // we explicitly remove the previous job before adding.
+  const jobId = `respond:${conversation.id}`;
+  const delay = deps.responseDelayMsOverride ?? salon.config.response_delay_ms;
+
+  await deps.respondQueue.remove(jobId).catch(() => undefined);
+  await deps.respondQueue.add(
+    'respond',
+    { conversationId: conversation.id, salonId: salon.id },
+    { jobId, delay, removeOnComplete: true, removeOnFail: 10 },
+  );
 }

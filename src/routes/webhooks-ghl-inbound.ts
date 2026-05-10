@@ -39,6 +39,7 @@ export async function inboundWebhookRoute(app: FastifyInstance): Promise<void> {
             ghl: app.deps.ghl,
             llm: app.deps.llm,
             defaultLlmModel: app.deps.defaultLlmModel,
+            respondQueue: app.deps.respondQueue,
           },
           {
             locationId: parsed.data.location_id,
