@@ -3,7 +3,9 @@ import { Redis } from 'ioredis';
 import { loadConfig } from './config.js';
 import { createKyselyDb } from './db/kysely.js';
 import { MockGhlClient } from './ghl/mock.js';
+import type { GhlClient } from './ghl/client.js';
 import { StubLlmClient } from './llm/client.js';
+import type { LlmClient } from './llm/client.js';
 import { logger } from './lib/logger.js';
 import { inboundWebhookRoute } from './routes/webhooks-ghl-inbound.js';
 import { devSimulateRoute } from './routes/dev-simulate.js';
@@ -13,8 +15,8 @@ async function main() {
   const cfg = loadConfig();
   const db = createKyselyDb(cfg.databaseUrl);
   const redis = new Redis(cfg.redisUrl);
-  const llm = new StubLlmClient();
-  const ghl = new MockGhlClient(db);
+  const llm: LlmClient = new StubLlmClient();
+  const ghl: GhlClient = new MockGhlClient(db);
 
   const app = Fastify({ logger: false });
 
@@ -56,8 +58,8 @@ declare module 'fastify' {
     deps: {
       db: ReturnType<typeof createKyselyDb>;
       redis: Redis;
-      ghl: MockGhlClient;
-      llm: StubLlmClient;
+      ghl: GhlClient;
+      llm: LlmClient;
       cfg: ReturnType<typeof loadConfig>;
     };
   }

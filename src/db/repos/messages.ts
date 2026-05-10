@@ -57,7 +57,7 @@ export async function insertOutbound(db: Db, input: InsertOutboundInput): Promis
       sanitize_mods: JSON.stringify(input.sanitizeMods),
       prompt_tokens: input.promptTokens,
       completion_tokens: input.completionTokens,
-      cost_usd: input.costUsd?.toFixed(6) ?? null,
+      cost_usd: input.costUsd === null ? null : input.costUsd.toFixed(6),
       ghl_message_id: input.ghlMessageId,
     })
     .returning('id')
