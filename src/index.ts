@@ -13,6 +13,7 @@ import { adminSalonsRoute } from './routes/admin-salons.js';
 import { resumeWebhookRoute } from './routes/webhooks-ghl-resume.js';
 import { createConnection, createRespondQueue, redisConnectionOptions, type RespondJobData } from './queue/index.js';
 import { buildRespondWorker } from './workers/respond.js';
+import { setupAutoResume } from './workers/auto-resume.js';
 import type { Redis } from 'ioredis';
 
 async function main() {
@@ -32,6 +33,8 @@ async function main() {
     defaultLlmModel: cfg.llmModel,
     connection,
   });
+
+  const autoResume = await setupAutoResume({ db, ghl, connection });
 
   const app = Fastify({ logger: false });
 
@@ -57,6 +60,8 @@ async function main() {
     logger.info('shutting down');
     await app.close();
     await respondWorker.close();
+    await autoResume.worker.close();
+    await autoResume.queue.close();
     await respondQueue.close();
     await redis.quit();
     await db.destroy();
