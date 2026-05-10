@@ -68,7 +68,8 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
   // BullMQ semantics: queue.add with same jobId on a delayed/waiting job is a no-op
   // and keeps the existing timer. To reset the timer when a new inbound arrives,
   // we explicitly remove the previous job before adding.
-  const jobId = `respond:${conversation.id}`;
+  // jobId separator is `-` not `:` — BullMQ v5 reserves `:` for Redis key namespacing.
+  const jobId = `respond-${conversation.id}`;
   const delay = deps.responseDelayMsOverride ?? salon.config.response_delay_ms;
 
   await deps.respondQueue.remove(jobId).catch(() => undefined);
