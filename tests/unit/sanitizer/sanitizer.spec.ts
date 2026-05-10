@@ -78,3 +78,26 @@ describe('sanitizer — links', () => {
     expect(result.modifications).not.toContain('booking_link_deduplicated');
   });
 });
+
+describe('sanitizer — word count split', () => {
+  it('keeps single message when under cap', async () => {
+    const result = await sanitize('Short reply', baseCtx);
+    expect(result.messages).toHaveLength(1);
+    expect(result.modifications).not.toContain('split_into_multiple');
+  });
+
+  it('splits into max two messages on sentence boundary when over cap', async () => {
+    const long =
+      'Hi there I would love to help you with that color appointment. ' +
+      'We do balayage and it usually takes about three hours. ' +
+      'Want me to send you the booking link so you can pick a time that works? ' +
+      'Sarah is the best for that service and she is around all week long.';
+    const result = await sanitize(long, baseCtx);
+    expect(result.messages.length).toBeGreaterThanOrEqual(1);
+    expect(result.messages.length).toBeLessThanOrEqual(2);
+    for (const m of result.messages) {
+      expect(m.split(/\s+/).length).toBeLessThanOrEqual(40);
+    }
+    expect(result.modifications).toContain('split_into_multiple');
+  });
+});

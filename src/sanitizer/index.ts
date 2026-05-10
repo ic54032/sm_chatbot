@@ -1,4 +1,5 @@
 import { SanitizerEmptyOutputError } from '../lib/errors.js';
+import { splitOnSentenceBoundaries } from './split.js';
 
 export interface SanitizeContext {
   bookingLink: string;
@@ -55,9 +56,19 @@ export async function sanitize(raw: string, ctx: SanitizeContext): Promise<Sanit
     mods.push('emojis_capped');
   }
 
-  if (text.length === 0) {
+  const words = text.split(/\s+/).filter(Boolean);
+  let messages: string[];
+  if (words.length <= ctx.policy.maxWordsPerMessage) {
+    messages = [text];
+  } else {
+    messages = splitOnSentenceBoundaries(text, ctx.policy.maxWordsPerMessage, 2);
+    mods.push('split_into_multiple');
+  }
+
+  messages = messages.map((m) => m.trim()).filter(Boolean);
+  if (messages.length === 0) {
     throw new SanitizerEmptyOutputError(raw, mods);
   }
 
-  return { messages: [text], modifications: mods };
+  return { messages, modifications: mods };
 }
