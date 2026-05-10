@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { logger } from '../lib/logger.js';
+import { handleInbound } from '../core/handle-inbound.js';
 
 const DevPayloadSchema = z.object({
   location_id: z.string().default('loc_dev'),
@@ -31,11 +32,22 @@ export async function devSimulateRoute(app: FastifyInstance): Promise<void> {
 
     reply.code(202).send({ accepted: true, message_id: messageId });
 
-    setImmediate(() => {
-      logger.info(
-        { payload: { ...data, message_id: messageId } },
-        '[stub] dev simulate received (handle-inbound wired in Task 8)',
-      );
+    setImmediate(async () => {
+      try {
+        await handleInbound(
+          { db: app.deps.db, ghl: app.deps.ghl, llm: app.deps.llm },
+          {
+            locationId: data.location_id,
+            contactId: data.contact_id,
+            contactHandle: data.contact_handle ?? null,
+            messageId,
+            messageText: data.stage_get_message ? null : data.message_text,
+            rawPayload: data,
+          },
+        );
+      } catch (err) {
+        logger.error({ err }, 'dev simulate handle-inbound failed');
+      }
     });
   });
 }

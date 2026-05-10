@@ -7,6 +7,7 @@ import { StubLlmClient } from './llm/client.js';
 import { logger } from './lib/logger.js';
 import { inboundWebhookRoute } from './routes/webhooks-ghl-inbound.js';
 import { devSimulateRoute } from './routes/dev-simulate.js';
+import { adminSalonsRoute } from './routes/admin-salons.js';
 
 async function main() {
   const cfg = loadConfig();
@@ -24,6 +25,7 @@ async function main() {
 
   await app.register(inboundWebhookRoute);
   await app.register(devSimulateRoute);
+  await app.register(adminSalonsRoute);
 
   app.setErrorHandler((err, _req, reply) => {
     logger.error({ err }, 'unhandled error');

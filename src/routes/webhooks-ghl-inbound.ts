@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { logger } from '../lib/logger.js';
+import { handleInbound } from '../core/handle-inbound.js';
 
 const InboundPayloadSchema = z.object({
   location_id: z.string(),
@@ -30,8 +31,22 @@ export async function inboundWebhookRoute(app: FastifyInstance): Promise<void> {
 
     reply.code(200).send({ accepted: true });
 
-    setImmediate(() => {
-      logger.info({ payload: parsed.data }, '[stub] inbound received (handle-inbound wired in Task 8)');
+    setImmediate(async () => {
+      try {
+        await handleInbound(
+          { db: app.deps.db, ghl: app.deps.ghl, llm: app.deps.llm },
+          {
+            locationId: parsed.data.location_id,
+            contactId: parsed.data.contact_id,
+            contactHandle: parsed.data.contact_handle ?? null,
+            messageId: parsed.data.message_id ?? null,
+            messageText: parsed.data.message_text ?? null,
+            rawPayload: parsed.data,
+          },
+        );
+      } catch (err) {
+        logger.error({ err }, 'handle-inbound failed');
+      }
     });
   });
 }
