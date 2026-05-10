@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: salon
+          POSTGRES_PASSWORD: salon
+          POSTGRES_DB: salon_test
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U salon"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 56379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      TEST_DATABASE_URL: postgres://salon:salon@localhost:55432/salon_test
+      TEST_REDIS_URL: redis://localhost:56379
+      # Test FakeLlmClient ignores key but config.ts requires non-empty for selected provider.
+      LLM_PROVIDER: anthropic
+      ANTHROPIC_API_KEY: test-unused
+      LLM_MODEL: fake-model
+      WEBHOOK_SECRET: test-secret-ci
+      ADMIN_API_KEY: test-admin-ci
+      DATABASE_URL: postgres://salon:salon@localhost:55432/salon_test
+      REDIS_URL: redis://localhost:56379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Lint (typecheck)
+        run: npm run lint
+
+      - name: Run migrations on test DB
+        run: npx tsx -e "import('./tests/helpers/test-db.ts').then(m => m.migrateTestDb()).then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); })"
+
+      - name: Run all tests
+        run: npm run test
