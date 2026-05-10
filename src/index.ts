@@ -5,6 +5,8 @@ import { createKyselyDb } from './db/kysely.js';
 import { MockGhlClient } from './ghl/mock.js';
 import { StubLlmClient } from './llm/client.js';
 import { logger } from './lib/logger.js';
+import { inboundWebhookRoute } from './routes/webhooks-ghl-inbound.js';
+import { devSimulateRoute } from './routes/dev-simulate.js';
 
 async function main() {
   const cfg = loadConfig();
@@ -20,11 +22,8 @@ async function main() {
   const deps = { db, redis, ghl, llm, cfg } as const;
   app.decorate('deps', deps);
 
-  // Routes wired in subsequent tasks; placeholder echo for now.
-  app.post('/dev/simulate-inbound', async (request, reply) => {
-    logger.info({ body: request.body }, '/dev/simulate-inbound (placeholder)');
-    return reply.code(202).send({ accepted: true });
-  });
+  await app.register(inboundWebhookRoute);
+  await app.register(devSimulateRoute);
 
   app.setErrorHandler((err, _req, reply) => {
     logger.error({ err }, 'unhandled error');
