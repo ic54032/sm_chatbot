@@ -39,7 +39,12 @@ export async function devSimulateRoute(app: FastifyInstance): Promise<void> {
     setImmediate(async () => {
       try {
         await handleInbound(
-          { db: app.deps.db, ghl: app.deps.ghl, llm: app.deps.llm },
+          {
+            db: app.deps.db,
+            ghl: app.deps.ghl,
+            llm: app.deps.llm,
+            defaultLlmModel: app.deps.defaultLlmModel,
+          },
           {
             locationId: data.location_id,
             contactId: data.contact_id,

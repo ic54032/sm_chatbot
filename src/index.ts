@@ -4,7 +4,7 @@ import { loadConfig } from './config.js';
 import { createKyselyDb } from './db/kysely.js';
 import { MockGhlClient } from './ghl/mock.js';
 import type { GhlClient } from './ghl/client.js';
-import { AnthropicLlmClient } from './llm/client.js';
+import { createLlmClient } from './llm/factory.js';
 import type { LlmClient } from './llm/client.js';
 import { logger } from './lib/logger.js';
 import { inboundWebhookRoute } from './routes/webhooks-ghl-inbound.js';
@@ -15,14 +15,14 @@ async function main() {
   const cfg = loadConfig();
   const db = createKyselyDb(cfg.databaseUrl);
   const redis = new Redis(cfg.redisUrl);
-  const llm: LlmClient = new AnthropicLlmClient(cfg.anthropicApiKey);
+  const llm: LlmClient = createLlmClient(cfg);
   const ghl: GhlClient = new MockGhlClient(db);
 
   const app = Fastify({ logger: false });
 
   app.get('/health', async () => ({ status: 'ok', ts: new Date().toISOString() }));
 
-  const deps = { db, redis, ghl, llm, cfg } as const;
+  const deps = { db, redis, ghl, llm, cfg, defaultLlmModel: cfg.llmModel } as const;
   app.decorate('deps', deps);
 
   await app.register(inboundWebhookRoute);
@@ -61,6 +61,7 @@ declare module 'fastify' {
       ghl: GhlClient;
       llm: LlmClient;
       cfg: ReturnType<typeof loadConfig>;
+      defaultLlmModel: string;
     };
   }
 }

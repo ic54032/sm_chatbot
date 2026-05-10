@@ -20,6 +20,7 @@ export interface HandleInboundDeps {
   db: Db;
   ghl: GhlClient;
   llm: LlmClient;
+  defaultLlmModel: string;
 }
 
 export async function handleInbound(deps: HandleInboundDeps, input: HandleInboundInput): Promise<void> {

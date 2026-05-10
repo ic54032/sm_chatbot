@@ -34,7 +34,12 @@ export async function inboundWebhookRoute(app: FastifyInstance): Promise<void> {
     setImmediate(async () => {
       try {
         await handleInbound(
-          { db: app.deps.db, ghl: app.deps.ghl, llm: app.deps.llm },
+          {
+            db: app.deps.db,
+            ghl: app.deps.ghl,
+            llm: app.deps.llm,
+            defaultLlmModel: app.deps.defaultLlmModel,
+          },
           {
             locationId: parsed.data.location_id,
             contactId: parsed.data.contact_id,

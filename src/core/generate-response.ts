@@ -18,6 +18,7 @@ export interface GenerateResponseDeps {
   db: Db;
   ghl: GhlClient;
   llm: LlmClient;
+  defaultLlmModel: string;
 }
 
 export async function generateResponse(deps: GenerateResponseDeps, salon: Salon, conversationId: string): Promise<void> {
@@ -43,7 +44,7 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
         systemPrompt: prompt.systemPrompt,
         messages: prompt.messages,
         tools: allTools,
-        model: salon.config.llm_model,
+        model: salon.config.llm_model ?? deps.defaultLlmModel,
         maxTokens: 512,
       });
       break;
