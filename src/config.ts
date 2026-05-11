@@ -15,6 +15,9 @@ const ConfigSchema = z
     openaiApiKey: z.string().min(1).optional(),
     geminiApiKey: z.string().min(1).optional(),
     llmModel: z.string().default('gemini-2.5-flash'),
+    useMockGhl: z.coerce.boolean().default(false),
+    ghlApiBaseUrl: z.string().url().default('https://services.leadconnectorhq.com'),
+    ghlApiVersion: z.string().default('2021-04-15'),
   })
   .superRefine((cfg, ctx) => {
     const requiredKey = {
@@ -47,5 +50,8 @@ export function loadConfig(): AppConfig {
     openaiApiKey: process.env.OPENAI_API_KEY,
     geminiApiKey: process.env.GEMINI_API_KEY,
     llmModel: process.env.LLM_MODEL,
+    useMockGhl: process.env.USE_MOCK_GHL,
+    ghlApiBaseUrl: process.env.GHL_API_BASE_URL,
+    ghlApiVersion: process.env.GHL_API_VERSION,
   });
 }
