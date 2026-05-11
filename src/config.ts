@@ -15,7 +15,11 @@ const ConfigSchema = z
     openaiApiKey: z.string().min(1).optional(),
     geminiApiKey: z.string().min(1).optional(),
     llmModel: z.string().default('gemini-2.5-flash'),
-    useMockGhl: z.coerce.boolean().default(false),
+    useMockGhl: z
+      .string()
+      .optional()
+      .default('false')
+      .transform((v) => v === 'true' || v === '1'),
     ghlApiBaseUrl: z.string().url().default('https://services.leadconnectorhq.com'),
     ghlApiVersion: z.string().default('2021-04-15'),
   })
