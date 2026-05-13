@@ -1,6 +1,6 @@
 import type { Queue } from 'bullmq';
 import type { Db } from '../db/kysely.js';
-import type { GhlClient } from '../ghl/client.js';
+import type { GhlFactory } from '../ghl/client.js';
 import type { LlmClient } from '../llm/client.js';
 import * as salonsRepo from '../db/repos/salons.js';
 import * as conversationsRepo from '../db/repos/conversations.js';
@@ -19,7 +19,7 @@ export interface HandleInboundInput {
 
 export interface HandleInboundDeps {
   db: Db;
-  ghl: GhlClient;
+  ghlFor: GhlFactory;
   llm: LlmClient;
   defaultLlmModel: string;
   respondQueue: Queue<RespondJobData>;
@@ -33,9 +33,11 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
     return;
   }
 
+  const ghl = deps.ghlFor(salon);
+
   let textContent = input.messageText ?? '';
   if (!textContent && input.messageId) {
-    const fetched = await deps.ghl.getMessage(input.messageId);
+    const fetched = await ghl.getMessage(input.messageId);
     textContent = fetched.text;
   }
   if (!textContent) {

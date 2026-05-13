@@ -2,7 +2,7 @@ import { Worker, type ConnectionOptions } from 'bullmq';
 import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import type { Db } from '../db/kysely.js';
-import type { GhlClient } from '../ghl/client.js';
+import type { GhlFactory } from '../ghl/client.js';
 import type { LlmClient } from '../llm/client.js';
 import * as salonsRepo from '../db/repos/salons.js';
 import { generateResponse } from '../core/generate-response.js';
@@ -25,7 +25,7 @@ end
 export interface BuildRespondWorkerDeps {
   db: Db;
   redis: Redis;
-  ghl: GhlClient;
+  ghlFor: GhlFactory;
   llm: LlmClient;
   defaultLlmModel: string;
   connection: ConnectionOptions;
@@ -49,8 +49,9 @@ export function buildRespondWorker(deps: BuildRespondWorkerDeps): Worker<Respond
           logger.warn({ salonId: job.data.salonId }, 'salon disappeared between schedule and run; dropping');
           return;
         }
+        const ghl = deps.ghlFor(salon);
         await generateResponse(
-          { db: deps.db, ghl: deps.ghl, llm: deps.llm, defaultLlmModel: deps.defaultLlmModel },
+          { db: deps.db, ghl, llm: deps.llm, defaultLlmModel: deps.defaultLlmModel },
           salon,
           job.data.conversationId,
         );

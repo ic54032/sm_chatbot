@@ -2,7 +2,6 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { logger } from '../lib/logger.js';
 import { handleInbound } from '../core/handle-inbound.js';
-import { MockGhlClient } from '../ghl/mock.js';
 
 const DevPayloadSchema = z.object({
   location_id: z.string().default('loc_dev'),
@@ -28,10 +27,10 @@ export async function devSimulateRoute(app: FastifyInstance): Promise<void> {
     const messageId = data.message_id ?? `dev_msg_${Date.now()}`;
 
     if (data.stage_get_message) {
-      if (!(app.deps.ghl instanceof MockGhlClient)) {
+      if (!app.deps.mockGhl) {
         return reply.code(503).send({ error: 'stage_get_message_only_supported_with_mock_ghl' });
       }
-      app.deps.ghl.stageMessage(messageId, data.message_text);
+      app.deps.mockGhl.stageMessage(messageId, data.message_text);
     }
 
     reply.code(202).send({ accepted: true, message_id: messageId });
@@ -41,7 +40,7 @@ export async function devSimulateRoute(app: FastifyInstance): Promise<void> {
         await handleInbound(
           {
             db: app.deps.db,
-            ghl: app.deps.ghl,
+            ghlFor: app.deps.ghlFor,
             llm: app.deps.llm,
             defaultLlmModel: app.deps.defaultLlmModel,
             respondQueue: app.deps.respondQueue,

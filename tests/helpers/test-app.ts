@@ -4,6 +4,7 @@ import { Redis } from 'ioredis';
 import type { Kysely } from 'kysely';
 import type { Database } from '../../src/db/schema.js';
 import { MockGhlClient } from '../../src/ghl/mock.js';
+import type { GhlFactory } from '../../src/ghl/client.js';
 import { inboundWebhookRoute } from '../../src/routes/webhooks-ghl-inbound.js';
 import { devSimulateRoute } from '../../src/routes/dev-simulate.js';
 import { adminSalonsRoute } from '../../src/routes/admin-salons.js';
@@ -30,8 +31,9 @@ export async function buildTestApp(db: Kysely<Database>, llm: LlmClient): Promis
   const redis = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
   const queue = new Queue<RespondJobData>('respond', { connection });
   const ghl = new MockGhlClient(db);
+  const ghlFor: GhlFactory = () => ghl;
   const defaultLlmModel = 'fake-model';
-  const worker = buildRespondWorker({ db, redis, ghl, llm, defaultLlmModel, connection });
+  const worker = buildRespondWorker({ db, redis, ghlFor, llm, defaultLlmModel, connection });
 
   const cfg = {
     port: 0,
@@ -49,7 +51,7 @@ export async function buildTestApp(db: Kysely<Database>, llm: LlmClient): Promis
   };
 
   const app = Fastify({ logger: false });
-  app.decorate('deps', { db, redis, ghl, llm, cfg, respondQueue: queue, defaultLlmModel });
+  app.decorate('deps', { db, redis, ghlFor, mockGhl: ghl, llm, cfg, respondQueue: queue, defaultLlmModel });
 
   await app.register(inboundWebhookRoute);
   await app.register(devSimulateRoute);

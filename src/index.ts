@@ -3,7 +3,9 @@ import type { Queue } from 'bullmq';
 import { loadConfig } from './config.js';
 import { createKyselyDb } from './db/kysely.js';
 import { MockGhlClient } from './ghl/mock.js';
-import type { GhlClient } from './ghl/client.js';
+import { makeGhlFactory } from './ghl/factory.js';
+import type { GhlFactory } from './ghl/client.js';
+import type { Salon } from './core/types.js';
 import { createLlmClient } from './llm/factory.js';
 import type { LlmClient } from './llm/client.js';
 import { logger } from './lib/logger.js';
@@ -21,26 +23,31 @@ async function main() {
   const db = createKyselyDb(cfg.databaseUrl);
   const redis = createConnection(cfg.redisUrl);
   const llm: LlmClient = createLlmClient(cfg);
-  const ghl: GhlClient = new MockGhlClient(db);
+  const ghlFor = makeGhlFactory({ useMock: cfg.useMockGhl, db });
+  const mockGhl: MockGhlClient | undefined = cfg.useMockGhl
+    ? (ghlFor({ id: 'sentinel' } as Salon) as MockGhlClient)
+    : undefined;
 
   const connection = redisConnectionOptions(cfg.redisUrl);
   const respondQueue = createRespondQueue(connection);
   const respondWorker = buildRespondWorker({
     db,
     redis,
-    ghl,
+    ghlFor,
     llm,
     defaultLlmModel: cfg.llmModel,
     connection,
   });
 
-  const autoResume = await setupAutoResume({ db, ghl, connection });
+  // TODO Phase D2: setupAutoResume takes ghlFor; for now we pass a sentinel-bound client.
+  // Auto-resume only fires for expired escalations; none exist between this commit and D2 landing.
+  const autoResume = await setupAutoResume({ db, ghl: ghlFor({ id: 'sentinel' } as Salon), connection });
 
   const app = Fastify({ logger: false });
 
   app.get('/health', async () => ({ status: 'ok', ts: new Date().toISOString() }));
 
-  const deps = { db, redis, ghl, llm, cfg, respondQueue, defaultLlmModel: cfg.llmModel } as const;
+  const deps = { db, redis, ghlFor, mockGhl, llm, cfg, respondQueue, defaultLlmModel: cfg.llmModel } as const;
   app.decorate('deps', deps);
 
   await app.register(inboundWebhookRoute);
@@ -81,7 +88,8 @@ declare module 'fastify' {
     deps: {
       db: ReturnType<typeof createKyselyDb>;
       redis: Redis;
-      ghl: GhlClient;
+      ghlFor: GhlFactory;
+      mockGhl: MockGhlClient | undefined;
       llm: LlmClient;
       cfg: ReturnType<typeof loadConfig>;
       respondQueue: Queue<RespondJobData>;

@@ -36,7 +36,7 @@ export async function inboundWebhookRoute(app: FastifyInstance): Promise<void> {
         await handleInbound(
           {
             db: app.deps.db,
-            ghl: app.deps.ghl,
+            ghlFor: app.deps.ghlFor,
             llm: app.deps.llm,
             defaultLlmModel: app.deps.defaultLlmModel,
             respondQueue: app.deps.respondQueue,
