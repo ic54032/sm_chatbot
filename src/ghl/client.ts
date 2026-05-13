@@ -19,3 +19,5 @@ export interface GhlClient {
     value: string | number | boolean;
   }): Promise<void>;
 }
+
+export type { GhlFactory } from './factory.js';
