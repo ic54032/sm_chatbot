@@ -39,9 +39,7 @@ async function main() {
     connection,
   });
 
-  // TODO Phase D2: setupAutoResume takes ghlFor; for now we pass a sentinel-bound client.
-  // Auto-resume only fires for expired escalations; none exist between this commit and D2 landing.
-  const autoResume = await setupAutoResume({ db, ghl: ghlFor({ id: 'sentinel' } as Salon), connection });
+  const autoResume = await setupAutoResume({ db, ghlFor, connection });
 
   const app = Fastify({ logger: false });
 

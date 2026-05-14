@@ -30,6 +30,7 @@ export interface ActiveTimedOutEscalation {
   escalationId: string;
   conversationId: string;
   contactId: string;
+  salonId: string;
 }
 
 export async function listActiveTimedOut(db: Db, now: Date): Promise<ActiveTimedOutEscalation[]> {
@@ -42,6 +43,7 @@ export async function listActiveTimedOut(db: Db, now: Date): Promise<ActiveTimed
       'escalations.id as escalationId',
       'conversations.id as conversationId',
       'conversations.ghl_contact_id as contactId',
+      'conversations.salon_id as salonId',
     ])
     .execute();
   return rows;

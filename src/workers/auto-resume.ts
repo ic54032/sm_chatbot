@@ -1,9 +1,10 @@
 import { Queue, Worker, type ConnectionOptions } from 'bullmq';
 import type { Db } from '../db/kysely.js';
-import type { GhlClient } from '../ghl/client.js';
+import type { GhlFactory } from '../ghl/client.js';
 import * as escalationsRepo from '../db/repos/escalations.js';
 import * as conversationsRepo from '../db/repos/conversations.js';
 import * as eventsRepo from '../db/repos/events.js';
+import * as salonsRepo from '../db/repos/salons.js';
 import { logger } from '../lib/logger.js';
 
 const AUTO_RESUME_QUEUE = 'auto-resume';
@@ -16,7 +17,7 @@ export interface AutoResumeSetup {
 
 export async function setupAutoResume(deps: {
   db: Db;
-  ghl: GhlClient;
+  ghlFor: GhlFactory;
   connection: ConnectionOptions;
 }): Promise<AutoResumeSetup> {
   const queue = new Queue(AUTO_RESUME_QUEUE, { connection: deps.connection });
@@ -51,9 +52,15 @@ export async function setupAutoResume(deps: {
       logger.info({ count: items.length }, 'auto-resume tick: found expired escalations');
       for (const item of items) {
         try {
+          const salon = await salonsRepo.findById(deps.db, item.salonId);
+          if (!salon) {
+            logger.warn({ escalationId: item.escalationId, salonId: item.salonId }, 'salon missing during auto-resume; skipping');
+            continue;
+          }
+          const ghl = deps.ghlFor(salon);
           await escalationsRepo.markResumed(deps.db, item.escalationId, 'auto_timeout');
           await conversationsRepo.setHandoffUntil(deps.db, item.conversationId, null);
-          await deps.ghl.removeTag(item.contactId, ['escalation_active']);
+          await ghl.removeTag(item.contactId, ['escalation_active']);
           await eventsRepo.insert(deps.db, item.conversationId, 'bot_resumed', { by: 'auto_timeout' });
           logger.info({ escalationId: item.escalationId, conversationId: item.conversationId }, 'auto-resumed');
         } catch (err) {
