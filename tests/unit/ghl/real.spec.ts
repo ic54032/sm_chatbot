@@ -101,3 +101,47 @@ describe('RealGhlClient.getMessage', () => {
     expect(result.attachments).toEqual([]);
   });
 });
+
+describe('RealGhlClient.addTag', () => {
+  it('POSTs to /contacts/{id}/tags with tags array', async () => {
+    let captured: { url: string; method?: string; body: unknown } | undefined;
+    const fetcher: typeof fetch = async (url, init) => {
+      captured = { url: String(url), method: init?.method, body: JSON.parse(init?.body as string) };
+      return new Response('{}', { status: 200 });
+    };
+    const client = new RealGhlClient('pit', 'loc', fetcher);
+    await client.addTag('c-1', ['escalation_active']);
+    expect(captured?.url).toBe('https://services.leadconnectorhq.com/contacts/c-1/tags');
+    expect(captured?.method).toBe('POST');
+    expect(captured?.body).toEqual({ tags: ['escalation_active'] });
+  });
+});
+
+describe('RealGhlClient.removeTag', () => {
+  it('DELETEs /contacts/{id}/tags with tags array', async () => {
+    let captured: { method?: string; body: unknown } | undefined;
+    const fetcher: typeof fetch = async (_url, init) => {
+      captured = { method: init?.method, body: JSON.parse(init?.body as string) };
+      return new Response('{}', { status: 200 });
+    };
+    const client = new RealGhlClient('pit', 'loc', fetcher);
+    await client.removeTag('c-1', ['escalation_active']);
+    expect(captured?.method).toBe('DELETE');
+    expect(captured?.body).toEqual({ tags: ['escalation_active'] });
+  });
+});
+
+describe('RealGhlClient.updateCustomField', () => {
+  it('PUTs /contacts/{id} with customFields array', async () => {
+    let captured: { url: string; method?: string; body: unknown } | undefined;
+    const fetcher: typeof fetch = async (url, init) => {
+      captured = { url: String(url), method: init?.method, body: JSON.parse(init?.body as string) };
+      return new Response('{}', { status: 200 });
+    };
+    const client = new RealGhlClient('pit', 'loc', fetcher);
+    await client.updateCustomField({ contactId: 'c-1', fieldId: 'f-1', value: 'reason' });
+    expect(captured?.url).toBe('https://services.leadconnectorhq.com/contacts/c-1');
+    expect(captured?.method).toBe('PUT');
+    expect(captured?.body).toEqual({ customFields: [{ id: 'f-1', value: 'reason' }] });
+  });
+});
