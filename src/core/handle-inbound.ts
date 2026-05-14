@@ -55,14 +55,16 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
     ghlMessageId: input.messageId,
   });
   if (!inserted) {
-    logger.debug({ messageId: input.messageId }, 'idempotent duplicate; skipping');
+    logger.info({ messageId: input.messageId, contactId: input.contactId }, 'inbound idempotent duplicate; skipping');
     return;
   }
+
+  logger.info({ conversationId: conversation.id, textPreview: textContent.slice(0, 80) }, 'inbound persisted');
 
   await conversationsRepo.touchLastMessageAt(deps.db, conversation.id, new Date());
 
   if (conversation.handoffUntil && conversation.handoffUntil > new Date()) {
-    logger.info({ conversationId: conversation.id }, 'handoff active; bot paused');
+    logger.info({ conversationId: conversation.id, handoffUntil: conversation.handoffUntil }, 'handoff active; bot paused');
     return;
   }
 
@@ -80,4 +82,6 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
     { conversationId: conversation.id, salonId: salon.id },
     { jobId, delay, removeOnComplete: true, removeOnFail: 10 },
   );
+
+  logger.info({ conversationId: conversation.id, jobId, delayMs: delay }, 'respond job queued');
 }
