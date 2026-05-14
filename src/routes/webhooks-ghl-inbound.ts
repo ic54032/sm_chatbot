@@ -31,6 +31,13 @@ export async function inboundWebhookRoute(app: FastifyInstance): Promise<void> {
 
     reply.code(200).send({ accepted: true });
 
+    // GHL merge tags can render to the literal strings "null" / "undefined" / ""
+    // when the template field has no value for the trigger context. Normalize
+    // these to real null so downstream dedup and getMessage logic doesn't treat
+    // them as opaque IDs.
+    const norm = (s: string | null | undefined): string | null =>
+      !s || s === 'null' || s === 'undefined' ? null : s;
+
     setImmediate(async () => {
       try {
         await handleInbound(
@@ -44,9 +51,9 @@ export async function inboundWebhookRoute(app: FastifyInstance): Promise<void> {
           {
             locationId: parsed.data.location_id,
             contactId: parsed.data.contact_id,
-            contactHandle: parsed.data.contact_handle ?? null,
-            messageId: parsed.data.message_id ?? null,
-            messageText: parsed.data.message_text ?? null,
+            contactHandle: norm(parsed.data.contact_handle),
+            messageId: norm(parsed.data.message_id),
+            messageText: norm(parsed.data.message_text),
             rawPayload: parsed.data,
           },
         );
