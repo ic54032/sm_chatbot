@@ -145,3 +145,65 @@ describe('RealGhlClient.updateCustomField', () => {
     expect(captured?.body).toEqual({ customFields: [{ id: 'f-1', value: 'reason' }] });
   });
 });
+
+describe('RealGhlClient retry on 5xx', () => {
+  it('retries 500 up to 2 times then propagates', async () => {
+    let calls = 0;
+    const fetcher: typeof fetch = async () => {
+      calls++;
+      return new Response('boom', { status: 500 });
+    };
+    const client = new RealGhlClient('pit', 'loc', fetcher);
+    await expect(client.getMessage('m')).rejects.toMatchObject({ status: 500 });
+    expect(calls).toBe(3); // initial + 2 retries
+  });
+
+  it('returns 200 after 1 transient 503', async () => {
+    let calls = 0;
+    const fetcher: typeof fetch = async () => {
+      calls++;
+      if (calls === 1) return new Response('', { status: 503 });
+      return new Response(JSON.stringify({}), { status: 200 });
+    };
+    const client = new RealGhlClient('pit', 'loc', fetcher);
+    const result = await client.getMessage('m');
+    expect(calls).toBe(2);
+    expect(result.text).toBe('');
+  });
+
+  it('does NOT retry 4xx other than 429', async () => {
+    let calls = 0;
+    const fetcher: typeof fetch = async () => {
+      calls++;
+      return new Response('', { status: 401 });
+    };
+    const client = new RealGhlClient('pit', 'loc', fetcher);
+    await expect(client.getMessage('m')).rejects.toMatchObject({ status: 401 });
+    expect(calls).toBe(1);
+  });
+
+  it('retries 429 once respecting Retry-After', async () => {
+    let calls = 0;
+    const fetcher: typeof fetch = async () => {
+      calls++;
+      if (calls === 1) {
+        return new Response('', { status: 429, headers: { 'Retry-After': '0' } });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    };
+    const client = new RealGhlClient('pit', 'loc', fetcher);
+    await client.getMessage('m');
+    expect(calls).toBe(2);
+  });
+
+  it('propagates 429 on second 429', async () => {
+    let calls = 0;
+    const fetcher: typeof fetch = async () => {
+      calls++;
+      return new Response('', { status: 429, headers: { 'Retry-After': '0' } });
+    };
+    const client = new RealGhlClient('pit', 'loc', fetcher);
+    await expect(client.getMessage('m')).rejects.toMatchObject({ status: 429 });
+    expect(calls).toBe(2);
+  });
+});
