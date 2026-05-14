@@ -45,6 +45,10 @@ async function main() {
 
   const app = Fastify({ logger: false });
 
+  app.addHook('onRequest', async (request) => {
+    logger.info({ method: request.method, url: request.url }, 'http request received');
+  });
+
   app.get('/health', async () => ({ status: 'ok', ts: new Date().toISOString() }));
 
   const deps = { db, redis, ghlFor, mockGhl, llm, cfg, respondQueue, defaultLlmModel: cfg.llmModel } as const;

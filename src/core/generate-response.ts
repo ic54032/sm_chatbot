@@ -122,6 +122,7 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
   }
 
   for (const message of sanitized.messages) {
+    logger.info({ conversationId, message }, 'sending message to ghl');
     try {
       const sent = await deps.ghl.sendMessage({
         contactId: ctx.conversation.ghlContactId,
