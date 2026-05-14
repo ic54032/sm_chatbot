@@ -14,6 +14,14 @@ export async function findByLocationId(db: Db, ghlLocationId: string): Promise<S
   return rowToSalon(row);
 }
 
+export async function setActive(db: Db, id: string, active: boolean): Promise<void> {
+  await db
+    .updateTable('salons')
+    .set({ is_active: active, updated_at: new Date() })
+    .where('id', '=', id)
+    .execute();
+}
+
 export async function findById(db: Db, id: string): Promise<Salon | null> {
   const row = await db
     .selectFrom('salons')

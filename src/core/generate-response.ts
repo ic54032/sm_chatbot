@@ -5,10 +5,12 @@ import type { Salon } from './types.js';
 import * as conversationsRepo from '../db/repos/conversations.js';
 import * as messagesRepo from '../db/repos/messages.js';
 import * as eventsRepo from '../db/repos/events.js';
+import * as salonsRepo from '../db/repos/salons.js';
 import { sanitize } from '../sanitizer/index.js';
 import { buildPrompt } from '../prompt/build.js';
 import { allTools } from '../prompt/tools.js';
 import { escalateToOwner } from './escalate.js';
+import { GhlApiError } from '../ghl/errors.js';
 import { SanitizerEmptyOutputError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 
@@ -148,13 +150,25 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
       logger.error({ err, conversationId }, 'ghl sendMessage failed');
       // Send fail takes precedence over LLM-requested escalation reason — operator
       // needs to know send is broken, not whatever the conversation context was.
-      await escalateToOwner({
-        db: deps.db,
-        ghl: deps.ghl,
-        salon,
-        conversation: ctx.conversation,
-        reason: 'cannot_reply_outside_window',
-      });
+      if (err instanceof GhlApiError && (err.status === 401 || err.status === 403)) {
+        logger.error({ err, salonId: salon.id }, 'GHL auth failed during sendMessage; disabling salon');
+        await salonsRepo.setActive(deps.db, salon.id, false);
+        await escalateToOwner({
+          db: deps.db,
+          ghl: deps.ghl,
+          salon,
+          conversation: ctx.conversation,
+          reason: 'ghl_auth_failed',
+        });
+      } else {
+        await escalateToOwner({
+          db: deps.db,
+          ghl: deps.ghl,
+          salon,
+          conversation: ctx.conversation,
+          reason: 'cannot_reply_outside_window',
+        });
+      }
       return;
     }
   }
