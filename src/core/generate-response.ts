@@ -66,22 +66,16 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
     }
   }
 
-  let escalated = false;
+  // Collect tool intentions. Defer escalate_to_owner execution until AFTER send
+  // so the LLM-generated reassurance text (e.g. "let me grab Sarah for you")
+  // reaches the client before the tag flips and the bot goes silent.
+  let escalationArgs: { reason: string; contextSummary?: string } | undefined;
   let linkSentToolCalled = false;
   for (const call of llmResult.toolCalls) {
     if (call.name === 'escalate_to_owner') {
       const reason = (call.arguments.reason as string | undefined) ?? 'unspecified';
       const summary = call.arguments.context_summary as string | undefined;
-      await escalateToOwner({
-        db: deps.db,
-        ghl: deps.ghl,
-        salon,
-        conversation: ctx.conversation,
-        reason,
-        contextSummary: summary,
-      });
-      escalated = true;
-      break;
+      escalationArgs = { reason, contextSummary: summary };
     } else if (call.name === 'mark_link_sent') {
       linkSentToolCalled = true;
     } else if (call.name === 'set_state_flag') {
@@ -94,7 +88,6 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
       }
     }
   }
-  if (escalated) return;
 
   let sanitized: Awaited<ReturnType<typeof sanitize>>;
   try {
@@ -109,16 +102,24 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
     });
   } catch (err) {
     if (err instanceof SanitizerEmptyOutputError) {
-      await escalateToOwner({
-        db: deps.db,
-        ghl: deps.ghl,
-        salon,
-        conversation: ctx.conversation,
-        reason: 'sanitizer_empty_output',
-      });
-      return;
+      // Empty output is only an unexpected failure when LLM had no escalation intent.
+      // If LLM already flagged escalate, treat empty text as "no reassurance message,
+      // just do the handoff" and continue.
+      if (escalationArgs) {
+        sanitized = { messages: [], modifications: [] };
+      } else {
+        await escalateToOwner({
+          db: deps.db,
+          ghl: deps.ghl,
+          salon,
+          conversation: ctx.conversation,
+          reason: 'sanitizer_empty_output',
+        });
+        return;
+      }
+    } else {
+      throw err;
     }
-    throw err;
   }
 
   for (const message of sanitized.messages) {
@@ -141,6 +142,8 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
       });
     } catch (err) {
       logger.error({ err, conversationId }, 'ghl sendMessage failed');
+      // Send fail takes precedence over LLM-requested escalation reason — operator
+      // needs to know send is broken, not whatever the conversation context was.
       await escalateToOwner({
         db: deps.db,
         ghl: deps.ghl,
@@ -150,6 +153,20 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
       });
       return;
     }
+  }
+
+  // After successful send, do the LLM-requested escalation. Owner gets push,
+  // opens conversation, sees customer's message + bot's reassurance, takes over.
+  if (escalationArgs) {
+    await escalateToOwner({
+      db: deps.db,
+      ghl: deps.ghl,
+      salon,
+      conversation: ctx.conversation,
+      reason: escalationArgs.reason,
+      contextSummary: escalationArgs.contextSummary,
+    });
+    return;
   }
 
   // Record booking_link_sent event AFTER successful send so the dedup window starts
