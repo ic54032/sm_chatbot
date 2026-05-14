@@ -103,10 +103,14 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
   } catch (err) {
     if (err instanceof SanitizerEmptyOutputError) {
       // Empty output is only an unexpected failure when LLM had no escalation intent.
-      // If LLM already flagged escalate, treat empty text as "no reassurance message,
-      // just do the handoff" and continue.
+      // If LLM already flagged escalate, substitute a canned reassurance line so the
+      // client doesn't see silence. Gemini (and other tool-tuned models) often emit
+      // only the tool call without accompanying text, so we can't rely on the prompt
+      // alone to produce the handoff message.
       if (escalationArgs) {
-        sanitized = { messages: [], modifications: [] };
+        const owner = salon.sourceOfTruth.salon.owner_first_name;
+        const fallback = `let me grab ${owner} for you, she'll jump in as soon as she's between clients 🤍`;
+        sanitized = { messages: [fallback], modifications: ['escalation_fallback_text'] };
       } else {
         await escalateToOwner({
           db: deps.db,
