@@ -3,7 +3,9 @@ services:
     name: salon-backend
     runtime: node
     plan: free
-    buildCommand: npm ci && npm run build
+    # --include=dev forces devDependencies (typescript, @types/*) to install
+    # even when NODE_ENV=production. Required for tsc to find type declarations.
+    buildCommand: npm ci --include=dev && npm run build
     # preDeployCommand not supported on free tier — migrations chain into
     # startCommand instead. Kysely migrator is idempotent (skips applied).
     startCommand: npm run migrate:up:prod && npm start
