@@ -25,7 +25,7 @@ export async function resumeWebhookRoute(app: FastifyInstance): Promise<void> {
 
     setImmediate(async () => {
       try {
-        const salon = await salonsRepo.findByLocationId(app.deps.db, parsed.data.location_id);
+        const salon = await salonsRepo.findByLocationId(app.deps.db, parsed.data.location_id, app.deps.cfg.pitEncryptionKey);
         if (!salon) {
           logger.warn({ locationId: parsed.data.location_id }, 'resume: salon not found');
           return;

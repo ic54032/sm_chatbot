@@ -22,7 +22,7 @@ const ConfigSchema = z
       .transform((v) => v === 'true' || v === '1'),
     ghlApiBaseUrl: z.string().url().default('https://services.leadconnectorhq.com'),
     ghlApiVersion: z.string().default('2021-04-15'),
-    pitEncryptionKey: z.string().min(44).max(45).optional(),
+    pitEncryptionKey: z.string().length(44).optional(),
   })
   .superRefine((cfg, ctx) => {
     const requiredKey = {
