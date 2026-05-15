@@ -4,8 +4,9 @@ services:
     runtime: node
     plan: free
     buildCommand: npm ci && npm run build
-    startCommand: npm start
-    preDeployCommand: npm run migrate:up:prod
+    # preDeployCommand not supported on free tier — migrations chain into
+    # startCommand instead. Kysely migrator is idempotent (skips applied).
+    startCommand: npm run migrate:up:prod && npm start
     healthCheckPath: /health
     envVars:
       - key: NODE_VERSION
