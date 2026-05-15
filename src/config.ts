@@ -22,6 +22,7 @@ const ConfigSchema = z
       .transform((v) => v === 'true' || v === '1'),
     ghlApiBaseUrl: z.string().url().default('https://services.leadconnectorhq.com'),
     ghlApiVersion: z.string().default('2021-04-15'),
+    pitEncryptionKey: z.string().min(44).max(45).optional(),
   })
   .superRefine((cfg, ctx) => {
     const requiredKey = {
@@ -57,5 +58,6 @@ export function loadConfig(): AppConfig {
     useMockGhl: process.env.USE_MOCK_GHL,
     ghlApiBaseUrl: process.env.GHL_API_BASE_URL,
     ghlApiVersion: process.env.GHL_API_VERSION,
+    pitEncryptionKey: process.env.PIT_ENCRYPTION_KEY,
   });
 }

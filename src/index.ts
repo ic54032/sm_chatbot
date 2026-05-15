@@ -33,9 +33,10 @@ async function main() {
     llm,
     defaultLlmModel: cfg.llmModel,
     connection,
+    encryptionKey: cfg.pitEncryptionKey,
   });
 
-  const autoResume = await setupAutoResume({ db, ghlFor, connection });
+  const autoResume = await setupAutoResume({ db, ghlFor, connection, encryptionKey: cfg.pitEncryptionKey });
 
   const app = Fastify({ logger: false });
 

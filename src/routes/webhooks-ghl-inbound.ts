@@ -47,6 +47,7 @@ export async function inboundWebhookRoute(app: FastifyInstance): Promise<void> {
             llm: app.deps.llm,
             defaultLlmModel: app.deps.defaultLlmModel,
             respondQueue: app.deps.respondQueue,
+            encryptionKey: app.deps.cfg.pitEncryptionKey,
           },
           {
             locationId: parsed.data.location_id,

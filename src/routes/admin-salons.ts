@@ -24,13 +24,17 @@ export async function adminSalonsRoute(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'invalid_payload', details: parsed.error.flatten() });
     }
 
-    const salon = await salonsRepo.create(app.deps.db, {
-      displayName: parsed.data.display_name,
-      ghlLocationId: parsed.data.ghl_location_id,
-      ghlPit: parsed.data.ghl_pit,
-      sourceOfTruth: parsed.data.source_of_truth,
-      config: parsed.data.config,
-    });
+    const salon = await salonsRepo.create(
+      app.deps.db,
+      {
+        displayName: parsed.data.display_name,
+        ghlLocationId: parsed.data.ghl_location_id,
+        ghlPit: parsed.data.ghl_pit,
+        sourceOfTruth: parsed.data.source_of_truth,
+        config: parsed.data.config,
+      },
+      app.deps.cfg.pitEncryptionKey,
+    );
 
     return reply.code(201).send({ id: salon.id });
   });

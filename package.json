@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",
     "test:e2e": "vitest run tests/e2e",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "encrypt-pits": "tsx scripts/encrypt-existing-pits.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",

@@ -29,6 +29,7 @@ export interface BuildRespondWorkerDeps {
   llm: LlmClient;
   defaultLlmModel: string;
   connection: ConnectionOptions;
+  encryptionKey?: string;
 }
 
 export function buildRespondWorker(deps: BuildRespondWorkerDeps): Worker<RespondJobData> {
@@ -44,7 +45,7 @@ export function buildRespondWorker(deps: BuildRespondWorkerDeps): Worker<Respond
         return;
       }
       try {
-        const salon = await salonsRepo.findById(deps.db, job.data.salonId);
+        const salon = await salonsRepo.findById(deps.db, job.data.salonId, deps.encryptionKey);
         if (!salon) {
           logger.warn({ salonId: job.data.salonId }, 'salon disappeared between schedule and run; dropping');
           return;

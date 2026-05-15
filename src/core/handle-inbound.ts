@@ -24,10 +24,11 @@ export interface HandleInboundDeps {
   defaultLlmModel: string;
   respondQueue: Queue<RespondJobData>;
   responseDelayMsOverride?: number;
+  encryptionKey?: string;
 }
 
 export async function handleInbound(deps: HandleInboundDeps, input: HandleInboundInput): Promise<void> {
-  const salon = await salonsRepo.findByLocationId(deps.db, input.locationId);
+  const salon = await salonsRepo.findByLocationId(deps.db, input.locationId, deps.encryptionKey);
   if (!salon) {
     logger.info({ locationId: input.locationId }, 'salon not found for inbound; dropping');
     return;

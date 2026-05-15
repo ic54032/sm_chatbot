@@ -19,6 +19,7 @@ export async function setupAutoResume(deps: {
   db: Db;
   ghlFor: GhlFactory;
   connection: ConnectionOptions;
+  encryptionKey?: string;
 }): Promise<AutoResumeSetup> {
   const queue = new Queue(AUTO_RESUME_QUEUE, { connection: deps.connection });
 
@@ -52,7 +53,7 @@ export async function setupAutoResume(deps: {
       logger.info({ count: items.length }, 'auto-resume tick: found expired escalations');
       for (const item of items) {
         try {
-          const salon = await salonsRepo.findById(deps.db, item.salonId);
+          const salon = await salonsRepo.findById(deps.db, item.salonId, deps.encryptionKey);
           if (!salon) {
             logger.warn({ escalationId: item.escalationId, salonId: item.salonId }, 'salon missing during auto-resume; skipping');
             continue;

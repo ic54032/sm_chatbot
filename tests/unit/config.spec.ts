@@ -50,4 +50,15 @@ describe('config V2 fields', () => {
     vi.stubEnv('GHL_API_VERSION', '2023-06-01');
     expect(loadConfig().ghlApiVersion).toBe('2023-06-01');
   });
+
+  it('pitEncryptionKey is optional (undefined when not set)', () => {
+    vi.stubEnv('PIT_ENCRYPTION_KEY', undefined as unknown as string);
+    expect(loadConfig().pitEncryptionKey).toBeUndefined();
+  });
+
+  it('pitEncryptionKey accepts a base64 string of 32 bytes', () => {
+    const key = Buffer.from(new Array(32).fill(0)).toString('base64'); // 44 chars
+    vi.stubEnv('PIT_ENCRYPTION_KEY', key);
+    expect(loadConfig().pitEncryptionKey).toBe(key);
+  });
 });
