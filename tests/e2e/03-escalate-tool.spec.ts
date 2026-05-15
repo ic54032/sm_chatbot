@@ -33,7 +33,7 @@ describe('e2e #3 — escalate_to_owner tool', () => {
     await db.destroy();
   });
 
-  it('sets handoff, adds tag, updates field, and sends no outbound', async () => {
+  it('sets handoff, adds tag, updates field, and sends canned reassurance', async () => {
     const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-bella.json'), 'utf8'));
     const salon = await salonsRepo.create(db, {
       displayName: fixture.display_name,
@@ -58,8 +58,13 @@ describe('e2e #3 — escalate_to_owner tool', () => {
     });
     await new Promise((r) => setTimeout(r, 1500));
 
+    // Phase C: when LLM emits only a tool call with empty text, backend sends a
+    // canned reassurance line ("let me grab <owner> for you...") before escalating
+    // so the client doesn't see silence. Prior behavior was zero outbound; that was
+    // worse UX. Verify the fallback fired and contains the owner's first name.
     const outbound = await db.selectFrom('messages').where('direction', '=', 'outbound').selectAll().execute();
-    expect(outbound).toHaveLength(0);
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0].text_content).toContain(fixture.source_of_truth.salon.owner_first_name);
 
     const conv = await db
       .selectFrom('conversations')
