@@ -9,3 +9,4 @@ coverage/
 # Scratch / dev artifacts
 eslint-out.txt
 payload.json
+scratch/
