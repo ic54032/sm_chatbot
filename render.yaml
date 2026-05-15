@@ -1,0 +1,55 @@
+services:
+  - type: web
+    name: salon-backend
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    preDeployCommand: npm run migrate:up:prod
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: salon-pg
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: salon-kv
+          type: keyvalue
+          property: connectionString
+      - key: LLM_PROVIDER
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: ADMIN_API_KEY
+        generateValue: true
+      - key: PIT_ENCRYPTION_KEY
+        sync: false
+      - key: USE_MOCK_GHL
+        value: "false"
+
+  - type: keyvalue
+    name: salon-kv
+    plan: free
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
+
+databases:
+  - name: salon-pg
+    plan: free
+    databaseName: salon
+    user: salon
