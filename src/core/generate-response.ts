@@ -49,6 +49,14 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
         model: salon.config.llm_model ?? deps.defaultLlmModel,
         maxTokens: 512,
       });
+      logger.info({
+        conversationId,
+        textLen: llmResult.text.length,
+        textPreview: llmResult.text.slice(0, 200),
+        toolCalls: llmResult.toolCalls.map((c) => c.name),
+        inputTokens: llmResult.usage.inputTokens,
+        outputTokens: llmResult.usage.outputTokens,
+      }, 'llm response received');
       break;
     } catch (err) {
       attempts++;
