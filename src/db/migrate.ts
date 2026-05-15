@@ -1,19 +1,18 @@
 import 'dotenv/config';
-import { Kysely, Migrator, PostgresDialect, FileMigrationProvider } from 'kysely';
-import { promises as fs } from 'node:fs';
-import * as path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { Kysely, Migrator, PostgresDialect, type Migration, type MigrationProvider } from 'kysely';
 import pg from 'pg';
 import { logger } from '../lib/logger.js';
+import * as migration0001 from './migrations/0001_initial.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Windows ESM workaround: FileMigrationProvider passes the joined path to
-// dynamic import(), which on Windows requires a file:// URL. Wrap path so that
-// join() produces a file:// URL string the ESM loader accepts.
-const urlPath = {
-  ...path,
-  join: (...parts: string[]) => pathToFileURL(path.join(...parts)).href,
+// Static migration provider — avoids kysely FileMigrationProvider's dynamic
+// import() of .ts files, which Node ESM rejects in production (no TS loader).
+// Same fix applied to tests/helpers/test-db.ts in commit 2aaad70.
+const staticProvider: MigrationProvider = {
+  async getMigrations(): Promise<Record<string, Migration>> {
+    return {
+      '0001_initial': migration0001 as Migration,
+    };
+  },
 };
 
 async function run() {
@@ -24,18 +23,17 @@ async function run() {
     process.exit(1);
   }
 
+  const isLocal = databaseUrl.includes('localhost') || databaseUrl.includes('127.0.0.1');
   const db = new Kysely<unknown>({
-    dialect: new PostgresDialect({ pool: new pg.Pool({ connectionString: databaseUrl }) }),
-  });
-
-  const migrator = new Migrator({
-    db,
-    provider: new FileMigrationProvider({
-      fs,
-      path: urlPath,
-      migrationFolder: path.resolve(__dirname, 'migrations'),
+    dialect: new PostgresDialect({
+      pool: new pg.Pool({
+        connectionString: databaseUrl,
+        ssl: isLocal ? false : { rejectUnauthorized: false },
+      }),
     }),
   });
+
+  const migrator = new Migrator({ db, provider: staticProvider });
 
   const { error, results } = direction === 'up'
     ? await migrator.migrateToLatest()
