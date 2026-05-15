@@ -6,18 +6,26 @@ import { RealGhlClient } from './real.js';
 
 export type GhlFactory = (salon: Salon) => GhlClient;
 
-export function makeGhlFactory(opts: { useMock: boolean; db: Db }): GhlFactory {
+export interface GhlFactorySetup {
+  factory: GhlFactory;
+  mockInstance: MockGhlClient | undefined;
+}
+
+export function makeGhlFactory(opts: { useMock: boolean; db: Db }): GhlFactorySetup {
   if (opts.useMock) {
     const mock = new MockGhlClient(opts.db);
-    return () => mock;
+    return { factory: () => mock, mockInstance: mock };
   }
   const cache = new Map<string, RealGhlClient>();
-  return (salon) => {
-    let client = cache.get(salon.id);
-    if (!client) {
-      client = new RealGhlClient(salon.ghlPit, salon.ghlLocationId);
-      cache.set(salon.id, client);
-    }
-    return client;
+  return {
+    factory: (salon) => {
+      let client = cache.get(salon.id);
+      if (!client) {
+        client = new RealGhlClient(salon.ghlPit, salon.ghlLocationId);
+        cache.set(salon.id, client);
+      }
+      return client;
+    },
+    mockInstance: undefined,
   };
 }

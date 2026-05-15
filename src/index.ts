@@ -5,7 +5,6 @@ import { createKyselyDb } from './db/kysely.js';
 import { MockGhlClient } from './ghl/mock.js';
 import { makeGhlFactory } from './ghl/factory.js';
 import type { GhlFactory } from './ghl/client.js';
-import type { Salon } from './core/types.js';
 import { createLlmClient } from './llm/factory.js';
 import type { LlmClient } from './llm/client.js';
 import { logger } from './lib/logger.js';
@@ -23,10 +22,7 @@ async function main() {
   const db = createKyselyDb(cfg.databaseUrl);
   const redis = createConnection(cfg.redisUrl);
   const llm: LlmClient = createLlmClient(cfg);
-  const ghlFor = makeGhlFactory({ useMock: cfg.useMockGhl, db });
-  const mockGhl: MockGhlClient | undefined = cfg.useMockGhl
-    ? (ghlFor({ id: 'sentinel' } as Salon) as MockGhlClient)
-    : undefined;
+  const { factory: ghlFor, mockInstance: mockGhl } = makeGhlFactory({ useMock: cfg.useMockGhl, db });
 
   const connection = redisConnectionOptions(cfg.redisUrl);
   const respondQueue = createRespondQueue(connection);
