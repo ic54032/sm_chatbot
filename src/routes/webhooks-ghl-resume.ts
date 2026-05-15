@@ -15,10 +15,12 @@ export async function resumeWebhookRoute(app: FastifyInstance): Promise<void> {
   app.post('/webhooks/ghl/resume', async (request, reply) => {
     const secret = request.headers['x-webhook-secret'];
     if (secret !== app.deps.cfg.webhookSecret) {
+      logger.warn('resume: webhook secret mismatch');
       return reply.code(401).send({ error: 'unauthorized' });
     }
     const parsed = ResumePayloadSchema.safeParse(request.body);
     if (!parsed.success) {
+      logger.warn({ details: parsed.error.flatten() }, 'resume: invalid payload');
       return reply.code(400).send({ error: 'invalid_payload' });
     }
     reply.code(200).send({ accepted: true });
