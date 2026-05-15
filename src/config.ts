@@ -22,7 +22,14 @@ const ConfigSchema = z
       .transform((v) => v === 'true' || v === '1'),
     ghlApiBaseUrl: z.string().url().default('https://services.leadconnectorhq.com'),
     ghlApiVersion: z.string().default('2021-04-15'),
-    pitEncryptionKey: z.string().length(44).optional(),
+    // Accepts 43 (base64url no padding), 44 (base64 with padding), or 45 chars.
+    // Empty string from unset env is coerced to undefined. crypto.ts:parseKey
+    // does the authoritative validation (decoded bytes === 32) when actually used.
+    pitEncryptionKey: z
+      .string()
+      .optional()
+      .transform((v) => (v && v.trim() !== '' ? v : undefined))
+      .pipe(z.string().min(43).max(45).optional()),
   })
   .superRefine((cfg, ctx) => {
     const requiredKey = {
