@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { loadConfig } from '../../src/config.js';
+import { SalonConfigSchema } from '../../src/core/salon-config-schema.js';
 
 describe('config V2 fields', () => {
   afterEach(() => {
@@ -60,5 +61,45 @@ describe('config V2 fields', () => {
     const key = Buffer.from(new Array(32).fill(0)).toString('base64'); // 44 chars
     vi.stubEnv('PIT_ENCRYPTION_KEY', key);
     expect(loadConfig().pitEncryptionKey).toBe(key);
+  });
+});
+
+describe('SalonConfigSchema image_processing defaults', () => {
+  const minimalConfig = {
+    ghl_custom_field_ids: {
+      needs_owner_attention: 'a',
+      bot_paused_until: 'b',
+      last_escalation_reason: 'c',
+    },
+  };
+
+  it('applies defaults when image_processing field is missing', () => {
+    const parsed = SalonConfigSchema.parse(minimalConfig);
+    expect(parsed.image_processing).toEqual({
+      enabled: true,
+      max_dimension: 1280,
+      jpeg_quality: 80,
+    });
+  });
+
+  it('respects partial overrides', () => {
+    const parsed = SalonConfigSchema.parse({
+      ...minimalConfig,
+      image_processing: { enabled: false },
+    });
+    expect(parsed.image_processing).toEqual({
+      enabled: false,
+      max_dimension: 1280,
+      jpeg_quality: 80,
+    });
+  });
+
+  it('rejects out-of-range max_dimension', () => {
+    expect(() =>
+      SalonConfigSchema.parse({
+        ...minimalConfig,
+        image_processing: { max_dimension: 4096 },
+      }),
+    ).toThrow();
   });
 });
