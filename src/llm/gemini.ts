@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import type { LlmClient, LlmCompleteInput, LlmCompleteOutput, ToolCall } from './client.js';
+import type { LlmClient, LlmCompleteInput, LlmCompleteOutput, ToolCall, ContentBlock } from './client.js';
 
 export class GeminiLlmClient implements LlmClient {
   private ai: GoogleGenAI;
@@ -9,11 +9,12 @@ export class GeminiLlmClient implements LlmClient {
   }
 
   async complete(input: LlmCompleteInput): Promise<LlmCompleteOutput> {
-    // Map our role-based messages to Gemini's contents shape.
-    // Anthropic/OpenAI use 'assistant'; Gemini uses 'model'.
     const contents = input.messages.map((m) => ({
       role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
+      parts:
+        typeof m.content === 'string'
+          ? [{ text: m.content }]
+          : m.content.map(mapBlock),
     }));
 
     const tools =
@@ -64,4 +65,9 @@ export class GeminiLlmClient implements LlmClient {
       },
     };
   }
+}
+
+function mapBlock(b: ContentBlock): { text: string } | { inlineData: { mimeType: string; data: string } } {
+  if (b.type === 'text') return { text: b.text };
+  return { inlineData: { mimeType: b.mediaType, data: b.base64 } };
 }
