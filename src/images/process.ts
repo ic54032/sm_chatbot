@@ -3,11 +3,11 @@ import { UnsupportedImageFormatError } from './errors.js';
 
 const MAX_DIMENSION = 1280;
 const JPEG_QUALITY = 80;
-const ALLOWED_INPUT_FORMATS = new Set(['jpeg', 'jpg', 'png', 'gif', 'webp']);
+const ALLOWED_INPUT_FORMATS = new Set(['jpeg', 'png', 'gif', 'webp']);
 
 export interface ProcessedImage {
   base64: string;
-  mediaType: 'image/jpeg' | 'image/png' | 'image/webp';
+  mediaType: 'image/jpeg';
   width: number;
   height: number;
   bytesIn: number;
