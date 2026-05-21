@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { LlmClient, LlmCompleteInput, LlmCompleteOutput, ToolCall } from './client.js';
+import type { LlmClient, LlmCompleteInput, LlmCompleteOutput, ToolCall, ContentBlock } from './client.js';
 
 export class AnthropicLlmClient implements LlmClient {
   private client: Anthropic;
@@ -13,7 +13,10 @@ export class AnthropicLlmClient implements LlmClient {
       model: input.model,
       max_tokens: input.maxTokens,
       system: input.systemPrompt,
-      messages: input.messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: input.messages.map((m) => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : m.content.map(mapBlock),
+      })),
       tools:
         input.tools.length > 0
           ? input.tools.map((t) => ({
@@ -46,4 +49,14 @@ export class AnthropicLlmClient implements LlmClient {
       },
     };
   }
+}
+
+function mapBlock(
+  b: ContentBlock,
+): Anthropic.Messages.TextBlockParam | Anthropic.Messages.ImageBlockParam {
+  if (b.type === 'text') return { type: 'text', text: b.text };
+  return {
+    type: 'image',
+    source: { type: 'base64', media_type: b.mediaType, data: b.base64 },
+  };
 }
