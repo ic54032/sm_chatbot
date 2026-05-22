@@ -48,7 +48,9 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
   const attachments = fetched.attachments ?? [];
 
   // DIAGNOSTIC: dump full inbound shape so we can see what GHL actually sends.
-  // Remove or downgrade once attachment plumbing is verified end-to-end.
+  // Includes raw payload VALUES (not just keys) so we can spot which merge tags
+  // resolved to real strings vs empty/null. Remove once attachment plumbing is
+  // verified end-to-end.
   const rawPayloadObj =
     typeof input.rawPayload === 'object' && input.rawPayload !== null
       ? (input.rawPayload as Record<string, unknown>)
@@ -64,8 +66,7 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
       apiAttachmentCount: attachments.length,
       apiAttachmentTypes: attachments.map((a) => a.type),
       apiAttachmentUrlPresent: attachments.map((a) => !!a.url),
-      rawPayloadKeys: Object.keys(rawPayloadObj),
-      rawPayloadAttachments: rawPayloadObj.attachments ?? null,
+      rawPayloadFull: rawPayloadObj,
     },
     'inbound classification debug',
   );
