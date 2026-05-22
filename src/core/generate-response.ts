@@ -80,7 +80,10 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
       const settled = await Promise.allSettled(
         rawAttachments.map(async (att) => {
           const buf = await fetchFn(att.url, salon.ghlPit);
-          return processImageForVision(buf);
+          return processImageForVision(buf, {
+            maxDimension: salon.config.image_processing.max_dimension,
+            jpegQuality: salon.config.image_processing.jpeg_quality,
+          });
         }),
       );
 

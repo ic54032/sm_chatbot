@@ -53,4 +53,16 @@ describe('processImageForVision', () => {
       UnsupportedImageFormatError,
     );
   });
+
+  it('respects custom maxDimension and jpegQuality', async () => {
+    const out = await processImageForVision(read('landscape-2000x1500.jpg'), {
+      maxDimension: 640,
+      jpegQuality: 50,
+    });
+    expect(out.width).toBe(640);
+    expect(out.height).toBe(480); // aspect preserved
+    // q50 should be noticeably smaller than q80 default
+    const defaultOut = await processImageForVision(read('landscape-2000x1500.jpg'));
+    expect(out.bytesOut).toBeLessThan(defaultOut.bytesOut);
+  });
 });

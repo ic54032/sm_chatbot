@@ -1,8 +1,6 @@
 import sharp from 'sharp';
 import { UnsupportedImageFormatError } from './errors.js';
 
-const MAX_DIMENSION = 1280;
-const JPEG_QUALITY = 80;
 const ALLOWED_INPUT_FORMATS = new Set(['jpeg', 'png', 'gif', 'webp']);
 
 export interface ProcessedImage {
@@ -14,7 +12,18 @@ export interface ProcessedImage {
   bytesOut: number;
 }
 
-export async function processImageForVision(input: Buffer): Promise<ProcessedImage> {
+export interface ProcessImageOptions {
+  maxDimension?: number;
+  jpegQuality?: number;
+}
+
+export async function processImageForVision(
+  input: Buffer,
+  opts: ProcessImageOptions = {},
+): Promise<ProcessedImage> {
+  const maxDimension = opts.maxDimension ?? 1280;
+  const jpegQuality = opts.jpegQuality ?? 80;
+
   let format: string | undefined;
   try {
     const meta = await sharp(input).metadata();
@@ -30,12 +39,12 @@ export async function processImageForVision(input: Buffer): Promise<ProcessedIma
   const out = await sharp(input, { animated: false })
     .rotate()
     .resize({
-      width: MAX_DIMENSION,
-      height: MAX_DIMENSION,
+      width: maxDimension,
+      height: maxDimension,
       fit: 'inside',
       withoutEnlargement: true,
     })
-    .jpeg({ quality: JPEG_QUALITY, mozjpeg: true })
+    .jpeg({ quality: jpegQuality, mozjpeg: true })
     .toBuffer({ resolveWithObject: true });
 
   return {

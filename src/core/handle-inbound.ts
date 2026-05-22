@@ -68,7 +68,10 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
   const inserted = await messagesRepo.insertInbound(deps.db, {
     conversationId: conversation.id,
     channelType,
-    rawContent: input.rawPayload,
+    rawContent: {
+      ...(input.rawPayload as Record<string, unknown>),
+      attachments, // enriched with fetched attachments — worker reads this back
+    },
     textContent: textContent || null,
     ghlMessageId: input.messageId,
   });
