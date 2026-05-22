@@ -75,7 +75,7 @@ Full step-by-step in [`docs/superpowers/specs/2026-05-11-salon-receptionist-v2-r
 ### Backend registration (~2 min)
 
 ```bash
-curl -X POST http://localhost:3000/admin/salons \
+curl -X POST https://salon-backend-cmhm.onrender.com/admin/salons \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_API_KEY" \
   -d '{
