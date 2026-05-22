@@ -26,7 +26,7 @@ export async function sendCannedReassurance(
   await repo.insertOutbound(deps.db, {
     conversationId: conversation.id,
     textContent: message,
-    aiRawOutput: '',
+    aiRawOutput: null,  // canned messages have no LLM output; distinguishable from LLM rows via NULL
     sanitizeMods: ['canned_reassurance'],
     promptTokens: 0,
     completionTokens: 0,

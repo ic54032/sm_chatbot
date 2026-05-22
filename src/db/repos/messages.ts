@@ -36,7 +36,7 @@ export async function insertInbound(db: Db, input: InsertInboundInput): Promise<
 export interface InsertOutboundInput {
   conversationId: string;
   textContent: string;
-  aiRawOutput: string;
+  aiRawOutput: string | null;
   sanitizeMods: string[];
   promptTokens: number;
   completionTokens: number;
