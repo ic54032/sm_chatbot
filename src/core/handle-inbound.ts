@@ -47,6 +47,29 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
   const textContent = (input.messageText ?? fetched.text ?? '').trim();
   const attachments = fetched.attachments ?? [];
 
+  // DIAGNOSTIC: dump full inbound shape so we can see what GHL actually sends.
+  // Remove or downgrade once attachment plumbing is verified end-to-end.
+  const rawPayloadObj =
+    typeof input.rawPayload === 'object' && input.rawPayload !== null
+      ? (input.rawPayload as Record<string, unknown>)
+      : {};
+  logger.info(
+    {
+      locationId: input.locationId,
+      contactId: input.contactId,
+      hasMessageId: !!input.messageId,
+      hasMessageText: !!input.messageText,
+      webhookTextLen: (input.messageText ?? '').length,
+      fetchedTextLen: (fetched.text ?? '').length,
+      apiAttachmentCount: attachments.length,
+      apiAttachmentTypes: attachments.map((a) => a.type),
+      apiAttachmentUrlPresent: attachments.map((a) => !!a.url),
+      rawPayloadKeys: Object.keys(rawPayloadObj),
+      rawPayloadAttachments: rawPayloadObj.attachments ?? null,
+    },
+    'inbound classification debug',
+  );
+
   const hasVideo = attachments.some((a) => a.type === 'video');
   const hasAudio = attachments.some((a) => a.type === 'audio');
   const images = attachments.filter((a) => a.type === 'image' && a.url);
