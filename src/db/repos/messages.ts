@@ -4,7 +4,7 @@ export interface InsertInboundInput {
   conversationId: string;
   channelType: 'text' | 'image' | 'voice';
   rawContent: unknown;
-  textContent: string;
+  textContent: string | null;
   ghlMessageId: string | null;
 }
 

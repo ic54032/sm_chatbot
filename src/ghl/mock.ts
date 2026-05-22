@@ -5,12 +5,12 @@ import { logger } from '../lib/logger.js';
 import type { GhlClient } from './client.js';
 
 export class MockGhlClient implements GhlClient {
-  private getMessageStore = new Map<string, { text: string; attachments: Array<{ url: string; type: 'image' | 'audio' | 'video' }> }>();
+  private getMessageStore = new Map<string, { text: string; attachments: Array<{ url: string | null; type: 'image' | 'audio' | 'video' }> }>();
 
   constructor(private db: Db) {}
 
   /** Test/dev helper: pre-stage a message so getMessage() can return it. */
-  stageMessage(messageId: string, text: string, attachments: Array<{ url: string; type: 'image' | 'audio' | 'video' }> = []): void {
+  stageMessage(messageId: string, text: string, attachments: Array<{ url: string | null; type: 'image' | 'audio' | 'video' }> = []): void {
     this.getMessageStore.set(messageId, { text, attachments });
   }
 
@@ -37,7 +37,7 @@ export class MockGhlClient implements GhlClient {
     return { ghlMessageId };
   }
 
-  async getMessage(messageId: string): Promise<{ text: string; attachments: Array<{ url: string; type: 'image' | 'audio' | 'video' }> }> {
+  async getMessage(messageId: string): Promise<{ text: string; attachments: Array<{ url: string | null; type: 'image' | 'audio' | 'video' }> }> {
     const staged = this.getMessageStore.get(messageId);
     if (staged) return staged;
     return { text: '', attachments: [] };
