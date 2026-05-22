@@ -101,6 +101,7 @@ const fakeContext: ConversationContext = {
       sanitizeMods: null,
       ghlMessageId: 'ghl-msg-1',
       createdAt: new Date(),
+      rawContent: null,
     },
   ],
   recentEvents: [],

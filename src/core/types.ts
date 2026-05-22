@@ -32,6 +32,7 @@ export interface Message {
   sanitizeMods: string[] | null;
   ghlMessageId: string | null;
   createdAt: Date;
+  rawContent: unknown;
 }
 
 export interface ConversationEvent {
