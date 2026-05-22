@@ -7,7 +7,7 @@ export interface GhlClient {
 
   getMessage(messageId: string): Promise<{
     text: string;
-    attachments: Array<{ url: string; type: 'image' | 'audio' | 'video' }>;
+    attachments: Array<{ url: string | null; type: 'image' | 'audio' | 'video' }>;
   }>;
 
   addTag(contactId: string, tags: string[]): Promise<void>;

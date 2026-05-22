@@ -12,6 +12,13 @@ export const SalonConfigSchema = z.object({
     bot_paused_until: z.string(),
     last_escalation_reason: z.string(),
   }),
+  image_processing: z
+    .object({
+      enabled: z.boolean().default(true),
+      max_dimension: z.number().int().min(512).max(2048).default(1280),
+      jpeg_quality: z.number().int().min(40).max(95).default(80),
+    })
+    .default({}),
 });
 
 export type SalonConfig = z.infer<typeof SalonConfigSchema>;

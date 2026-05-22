@@ -4,7 +4,7 @@ export interface InsertInboundInput {
   conversationId: string;
   channelType: 'text' | 'image' | 'voice';
   rawContent: unknown;
-  textContent: string;
+  textContent: string | null;
   ghlMessageId: string | null;
 }
 
@@ -36,7 +36,7 @@ export async function insertInbound(db: Db, input: InsertInboundInput): Promise<
 export interface InsertOutboundInput {
   conversationId: string;
   textContent: string;
-  aiRawOutput: string;
+  aiRawOutput: string | null;
   sanitizeMods: string[];
   promptTokens: number;
   completionTokens: number;

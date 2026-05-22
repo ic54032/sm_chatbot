@@ -74,6 +74,7 @@ const fakeSalon: Salon = {
       bot_paused_until: 'field_paused',
       last_escalation_reason: 'field_reason',
     },
+    image_processing: { enabled: true, max_dimension: 1280, jpeg_quality: 80 },
   },
 };
 
@@ -101,6 +102,7 @@ const fakeContext: ConversationContext = {
       sanitizeMods: null,
       ghlMessageId: 'ghl-msg-1',
       createdAt: new Date(),
+      rawContent: null,
     },
   ],
   recentEvents: [],

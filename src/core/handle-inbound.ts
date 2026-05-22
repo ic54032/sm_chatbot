@@ -7,6 +7,8 @@ import * as conversationsRepo from '../db/repos/conversations.js';
 import * as messagesRepo from '../db/repos/messages.js';
 import type { RespondJobData } from '../queue/index.js';
 import { logger } from '../lib/logger.js';
+import { sendCannedReassurance } from './canned-messages.js';
+import { escalateToOwner } from './escalate.js';
 
 export interface HandleInboundInput {
   locationId: string;
@@ -36,23 +38,41 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
 
   const ghl = deps.ghlFor(salon);
 
-  let textContent = input.messageText ?? '';
-  if (!textContent && input.messageId) {
-    const fetched = await ghl.getMessage(input.messageId);
-    textContent = fetched.text;
-  }
-  if (!textContent) {
-    logger.warn({ locationId: input.locationId, contactId: input.contactId }, 'inbound has no text; dropping');
+  // Always fetch (to get attachments) — even when input.messageText is provided,
+  // we still need the attachments array to classify video/audio/image cases.
+  const fetched = input.messageId
+    ? await ghl.getMessage(input.messageId)
+    : { text: '', attachments: [] as Array<{ url: string | null; type: 'image' | 'audio' | 'video' }> };
+  // Trim to drop whitespace-only inbounds (e.g., accidental empty IG send).
+  const textContent = (input.messageText ?? fetched.text ?? '').trim();
+  const attachments = fetched.attachments ?? [];
+
+  const hasVideo = attachments.some((a) => a.type === 'video');
+  const hasAudio = attachments.some((a) => a.type === 'audio');
+  const images = attachments.filter((a) => a.type === 'image' && a.url);
+  const imagesMissingUrl = attachments.filter((a) => a.type === 'image' && !a.url);
+
+  if (!textContent && attachments.length === 0) {
+    logger.warn(
+      { locationId: input.locationId, contactId: input.contactId },
+      'inbound has no text and no attachments; dropping',
+    );
     return;
   }
+
+  const channelType: 'text' | 'image' =
+    images.length > 0 || hasVideo || hasAudio || imagesMissingUrl.length > 0 ? 'image' : 'text';
 
   const conversation = await conversationsRepo.findOrCreate(deps.db, salon.id, input.contactId, input.contactHandle);
 
   const inserted = await messagesRepo.insertInbound(deps.db, {
     conversationId: conversation.id,
-    channelType: 'text',
-    rawContent: input.rawPayload,
-    textContent,
+    channelType,
+    rawContent: {
+      ...(input.rawPayload as Record<string, unknown>),
+      attachments, // enriched with fetched attachments — worker reads this back
+    },
+    textContent: textContent || null,
     ghlMessageId: input.messageId,
   });
   if (!inserted) {
@@ -60,15 +80,58 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
     return;
   }
 
-  logger.info({ conversationId: conversation.id, textPreview: textContent.slice(0, 80) }, 'inbound persisted');
+  logger.info(
+    { conversationId: conversation.id, channelType, attachmentCount: attachments.length },
+    'inbound persisted',
+  );
 
   await conversationsRepo.touchLastMessageAt(deps.db, conversation.id, new Date());
 
   if (conversation.handoffUntil && conversation.handoffUntil > new Date()) {
-    logger.info({ conversationId: conversation.id, handoffUntil: conversation.handoffUntil }, 'handoff active; bot paused');
+    logger.info(
+      { conversationId: conversation.id, handoffUntil: conversation.handoffUntil },
+      'handoff active; bot paused',
+    );
     return;
   }
 
+  // Hard escalation prečaci — skip respond queue entirely for media we can't handle.
+  // Canned reassurance is best-effort; escalation always proceeds (graceful degradation
+  // when outside 24h IG window, etc.).
+  const owner = salon.sourceOfTruth.salon.owner_first_name;
+
+  const tryCannedAndEscalate = async (message: string, reason: string): Promise<void> => {
+    try {
+      await sendCannedReassurance({ db: deps.db, ghl }, salon, conversation, message);
+    } catch (err) {
+      logger.warn({ err, conversationId: conversation.id }, 'canned reassurance failed; proceeding with escalation');
+    }
+    await escalateToOwner({ db: deps.db, ghl, salon, conversation, reason });
+  };
+
+  if (hasVideo) {
+    await tryCannedAndEscalate(
+      `haha nije mi se uspio otvoriti video ovdje 🤍 ${owner} ti se javi čim bude između klijenata`,
+      'video_attachment',
+    );
+    return;
+  }
+  if (hasAudio) {
+    await tryCannedAndEscalate(
+      `nisam mogla otvoriti audio poruku 🤍 ${owner} ti se javi čim bude između klijenata`,
+      'audio_attachment',
+    );
+    return;
+  }
+  if (imagesMissingUrl.length > 0) {
+    await tryCannedAndEscalate(
+      `vidim da si poslala nešto, ali mi se ne učitava 🤍 ${owner} ti se javi čim bude između klijenata`,
+      'image_without_url',
+    );
+    return;
+  }
+
+  // Standard put — queue respond job.
   // Rolling-delay coalescing: remove pending job (if any) and schedule fresh.
   // BullMQ semantics: queue.add with same jobId on a delayed/waiting job is a no-op
   // and keeps the existing timer. To reset the timer when a new inbound arrives,

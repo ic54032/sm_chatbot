@@ -1,11 +1,21 @@
 import type { Salon, ConversationContext } from '../core/types.js';
+import type { ContentBlock } from '../llm/client.js';
+import type { ProcessedImage } from '../images/process.js';
+
+export interface BuildPromptInput {
+  salon: Salon;
+  ctx: ConversationContext;
+  bookingLinkRecentlySent: boolean;
+  imagesByMessageId: Map<string, ProcessedImage[]>;
+}
 
 export interface BuildPromptOutput {
   systemPrompt: string;
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  messages: Array<{ role: 'user' | 'assistant'; content: string | ContentBlock[] }>;
 }
 
-export function buildPrompt(salon: Salon, ctx: ConversationContext, bookingLinkRecentlySent: boolean): BuildPromptOutput {
+export function buildPrompt(input: BuildPromptInput): BuildPromptOutput {
+  const { salon, ctx, bookingLinkRecentlySent, imagesByMessageId } = input;
   const sot = salon.sourceOfTruth;
   const state = ctx.conversation.state;
   const owner = sot.salon.owner_first_name;
@@ -222,10 +232,20 @@ ${JSON.stringify(sot, null, 2)}
 
 Respond now as ${owner}'s assistant. Output only the message text the client will read.`;
 
-  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  const messages: BuildPromptOutput['messages'] = [];
   for (const m of ctx.recentMessages) {
     if (m.direction === 'inbound') {
-      messages.push({ role: 'user', content: m.textContent ?? '' });
+      const imgs = imagesByMessageId.get(m.id);
+      if (imgs && imgs.length > 0) {
+        const blocks: ContentBlock[] = [];
+        for (const img of imgs) {
+          blocks.push({ type: 'image', mediaType: img.mediaType, base64: img.base64 });
+        }
+        blocks.push({ type: 'text', text: m.textContent ?? '[image only, no caption]' });
+        messages.push({ role: 'user', content: blocks });
+      } else {
+        messages.push({ role: 'user', content: m.textContent ?? '' });
+      }
     } else if (m.direction === 'outbound' || m.direction === 'owner') {
       messages.push({ role: 'assistant', content: m.textContent ?? '' });
     }

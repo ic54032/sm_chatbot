@@ -10,9 +10,13 @@ export interface ToolCall {
   arguments: Record<string, unknown>;
 }
 
+export type ContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; mediaType: 'image/jpeg' | 'image/png' | 'image/webp'; base64: string };
+
 export interface LlmCompleteInput {
   systemPrompt: string;
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  messages: Array<{ role: 'user' | 'assistant'; content: string | ContentBlock[] }>;
   tools: ToolDefinition[];
   model: string;
   maxTokens: number;

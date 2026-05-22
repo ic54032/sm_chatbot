@@ -12,6 +12,7 @@ import { resumeWebhookRoute } from '../../src/routes/webhooks-ghl-resume.js';
 import { buildRespondWorker } from '../../src/workers/respond.js';
 import type { RespondJobData } from '../../src/queue/index.js';
 import type { LlmClient } from '../../src/llm/client.js';
+import type { fetchAttachment as defaultFetchAttachment } from '../../src/images/fetch.js';
 
 const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://localhost:56379';
 
@@ -24,7 +25,11 @@ export interface TestApp {
   shutdown: () => Promise<void>;
 }
 
-export async function buildTestApp(db: Kysely<Database>, llm: LlmClient): Promise<TestApp> {
+export async function buildTestApp(
+  db: Kysely<Database>,
+  llm: LlmClient,
+  options?: { fetchAttachment?: typeof defaultFetchAttachment },
+): Promise<TestApp> {
   const url = new URL(REDIS_URL);
   const connection = { host: url.hostname, port: Number(url.port || 6379) };
 
@@ -33,7 +38,15 @@ export async function buildTestApp(db: Kysely<Database>, llm: LlmClient): Promis
   const ghl = new MockGhlClient(db);
   const ghlFor: GhlFactory = () => ghl;
   const defaultLlmModel = 'fake-model';
-  const worker = buildRespondWorker({ db, redis, ghlFor, llm, defaultLlmModel, connection });
+  const worker = buildRespondWorker({
+    db,
+    redis,
+    ghlFor,
+    llm,
+    defaultLlmModel,
+    connection,
+    fetchAttachment: options?.fetchAttachment,
+  });
 
   const cfg = {
     port: 0,

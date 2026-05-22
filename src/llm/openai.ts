@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import type { LlmClient, LlmCompleteInput, LlmCompleteOutput, ToolCall } from './client.js';
+import type { LlmClient, LlmCompleteInput, LlmCompleteOutput, ToolCall, ContentBlock } from './client.js';
 
 export class OpenAiLlmClient implements LlmClient {
   private client: OpenAI;
@@ -11,9 +11,15 @@ export class OpenAiLlmClient implements LlmClient {
   async complete(input: LlmCompleteInput): Promise<LlmCompleteOutput> {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: 'system', content: input.systemPrompt },
-      ...input.messages.map(
-        (m) => ({ role: m.role, content: m.content }) as OpenAI.Chat.Completions.ChatCompletionMessageParam,
-      ),
+      ...input.messages.map((m) => {
+        if (typeof m.content === 'string') {
+          return { role: m.role, content: m.content } as OpenAI.Chat.Completions.ChatCompletionMessageParam;
+        }
+        return {
+          role: m.role,
+          content: m.content.map(mapBlock),
+        } as OpenAI.Chat.Completions.ChatCompletionMessageParam;
+      }),
     ];
 
     const tools: OpenAI.Chat.Completions.ChatCompletionTool[] | undefined =
@@ -63,4 +69,12 @@ export class OpenAiLlmClient implements LlmClient {
       },
     };
   }
+}
+
+function mapBlock(b: ContentBlock): OpenAI.Chat.Completions.ChatCompletionContentPart {
+  if (b.type === 'text') return { type: 'text', text: b.text };
+  return {
+    type: 'image_url',
+    image_url: { url: `data:${b.mediaType};base64,${b.base64}` },
+  };
 }

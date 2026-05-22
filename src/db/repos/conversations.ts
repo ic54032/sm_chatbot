@@ -107,6 +107,7 @@ function rowToMessage(row: {
   sanitize_mods: unknown;
   ghl_message_id: string | null;
   created_at: Date;
+  raw_content: unknown;
 }): Message {
   return {
     id: row.id,
@@ -118,6 +119,7 @@ function rowToMessage(row: {
     sanitizeMods: (row.sanitize_mods as string[] | null) ?? null,
     ghlMessageId: row.ghl_message_id,
     createdAt: row.created_at,
+    rawContent: row.raw_content,
   };
 }
 

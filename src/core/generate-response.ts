@@ -13,6 +13,9 @@ import { escalateToOwner } from './escalate.js';
 import { GhlApiError } from '../ghl/errors.js';
 import { SanitizerEmptyOutputError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
+import { extractImageAttachments } from '../images/extract-attachments.js';
+import { fetchAttachment as defaultFetchAttachment } from '../images/fetch.js';
+import { processImageForVision, type ProcessedImage } from '../images/process.js';
 
 const ALLOWED_STATE_KEYS = ['client_is_hesitant', 'last_quoted_service'] as const;
 
@@ -21,6 +24,12 @@ export interface GenerateResponseDeps {
   ghl: GhlClient;
   llm: LlmClient;
   defaultLlmModel: string;
+  /**
+   * Testability hook for image attachment HTTP fetches. Defaults to the real
+   * implementation in src/images/fetch.ts. Unit tests inject a stub so they
+   * don't make actual network calls.
+   */
+  fetchAttachment?: typeof defaultFetchAttachment;
 }
 
 export async function generateResponse(deps: GenerateResponseDeps, salon: Salon, conversationId: string): Promise<void> {
@@ -36,7 +45,79 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
     conversationId,
     salon.config.booking_link_dedup_window,
   );
-  const prompt = buildPrompt(salon, ctx, bookingLinkRecentlySent);
+
+  // ── Image orchestration ─────────────────────────────────────────────────────
+  // Fetch + process images for every inbound message in the recent window so the
+  // LLM can see the actual pixels. OpenAI vision cache absorbs the cost of
+  // refetching historical images turn after turn. We distinguish current-turn
+  // failures (escalate, bot can't reply meaningfully) from historical failures
+  // (log+skip, the current message is still actionable).
+  const imagesByMessageId = new Map<string, ProcessedImage[]>();
+  const lastInbound = [...ctx.recentMessages].reverse().find((m) => m.direction === 'inbound');
+  const lastInboundAttachments = lastInbound ? extractImageAttachments(lastInbound.rawContent) : [];
+
+  if (!salon.config.image_processing.enabled && lastInboundAttachments.length > 0) {
+    logger.info({ conversationId, salonId: salon.id }, 'image_processing disabled; escalating');
+    await escalateToOwner({
+      db: deps.db,
+      ghl: deps.ghl,
+      salon,
+      conversation: ctx.conversation,
+      reason: 'image_processing_disabled',
+    });
+    return;
+  }
+
+  if (salon.config.image_processing.enabled) {
+    const fetchFn = deps.fetchAttachment ?? defaultFetchAttachment;
+
+    // Paralelni fetch unutar iste poruke, serijski među porukama (rate-limit safe).
+    for (const msg of ctx.recentMessages) {
+      if (msg.direction !== 'inbound') continue;
+      const rawAttachments = extractImageAttachments(msg.rawContent);
+      if (rawAttachments.length === 0) continue;
+
+      const settled = await Promise.allSettled(
+        rawAttachments.map(async (att) => {
+          const buf = await fetchFn(att.url, salon.ghlPit);
+          return processImageForVision(buf, {
+            maxDimension: salon.config.image_processing.max_dimension,
+            jpegQuality: salon.config.image_processing.jpeg_quality,
+          });
+        }),
+      );
+
+      const succeeded: ProcessedImage[] = [];
+      for (const r of settled) {
+        if (r.status === 'fulfilled') {
+          succeeded.push(r.value);
+        } else {
+          logger.warn({ err: r.reason, messageId: msg.id }, 'image fetch/process failed; skipping');
+        }
+      }
+      if (succeeded.length > 0) imagesByMessageId.set(msg.id, succeeded);
+    }
+
+    // Current-turn failure check: if the LAST inbound had image attachments but
+    // none survived fetch+process, escalate. The signal is too important to lose
+    // silently — owner needs to intervene.
+    if (lastInbound && lastInboundAttachments.length > 0) {
+      const processedForLast = imagesByMessageId.get(lastInbound.id);
+      if (!processedForLast || processedForLast.length === 0) {
+        logger.warn({ conversationId, messageId: lastInbound.id }, 'current-turn image fetch failed; escalating');
+        await escalateToOwner({
+          db: deps.db,
+          ghl: deps.ghl,
+          salon,
+          conversation: ctx.conversation,
+          reason: 'attachment_fetch_failed',
+        });
+        return;
+      }
+    }
+  }
+
+  const prompt = buildPrompt({ salon, ctx, bookingLinkRecentlySent, imagesByMessageId });
 
   let llmResult: Awaited<ReturnType<typeof deps.llm.complete>>;
   let attempts = 0;

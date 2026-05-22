@@ -81,8 +81,8 @@ export class RealGhlClient implements GhlClient {
     return { ghlMessageId: id };
   }
 
-  async getMessage(messageId: string): Promise<{ text: string; attachments: Array<{ url: string; type: 'image' | 'audio' | 'video' }> }> {
-    const res = await this.request<{ message?: { body?: string; attachments?: Array<{ url: string; type: string }> } }>(
+  async getMessage(messageId: string): Promise<{ text: string; attachments: Array<{ url: string | null; type: 'image' | 'audio' | 'video' }> }> {
+    const res = await this.request<{ message?: { body?: string; attachments?: Array<{ url?: string | null; type?: string }> } }>(
       'GET',
       `/conversations/messages/${encodeURIComponent(messageId)}`,
     );
@@ -90,7 +90,7 @@ export class RealGhlClient implements GhlClient {
     return {
       text: msg.body ?? '',
       attachments: (msg.attachments ?? []).map((a) => ({
-        url: a.url,
+        url: a.url ?? null,
         type: (a.type as 'image' | 'audio' | 'video') ?? 'image',
       })),
     };
