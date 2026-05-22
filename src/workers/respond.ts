@@ -6,6 +6,7 @@ import type { GhlFactory } from '../ghl/client.js';
 import type { LlmClient } from '../llm/client.js';
 import * as salonsRepo from '../db/repos/salons.js';
 import { generateResponse } from '../core/generate-response.js';
+import type { fetchAttachment as defaultFetchAttachment } from '../images/fetch.js';
 import type { RespondJobData } from '../queue/index.js';
 import { logger } from '../lib/logger.js';
 
@@ -30,6 +31,7 @@ export interface BuildRespondWorkerDeps {
   defaultLlmModel: string;
   connection: ConnectionOptions;
   encryptionKey?: string;
+  fetchAttachment?: typeof defaultFetchAttachment;
 }
 
 export function buildRespondWorker(deps: BuildRespondWorkerDeps): Worker<RespondJobData> {
@@ -52,7 +54,13 @@ export function buildRespondWorker(deps: BuildRespondWorkerDeps): Worker<Respond
         }
         const ghl = deps.ghlFor(salon);
         await generateResponse(
-          { db: deps.db, ghl, llm: deps.llm, defaultLlmModel: deps.defaultLlmModel },
+          {
+            db: deps.db,
+            ghl,
+            llm: deps.llm,
+            defaultLlmModel: deps.defaultLlmModel,
+            fetchAttachment: deps.fetchAttachment,
+          },
           salon,
           job.data.conversationId,
         );
