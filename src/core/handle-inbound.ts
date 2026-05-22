@@ -43,6 +43,7 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
   const fetched = input.messageId
     ? await ghl.getMessage(input.messageId)
     : { text: '', attachments: [] as Array<{ url: string | null; type: 'image' | 'audio' | 'video' }> };
+  // Trim to drop whitespace-only inbounds (e.g., accidental empty IG send).
   const textContent = (input.messageText ?? fetched.text ?? '').trim();
   const attachments = fetched.attachments ?? [];
 

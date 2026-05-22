@@ -100,6 +100,20 @@ describe('RealGhlClient.getMessage', () => {
     expect(result.text).toBe('');
     expect(result.attachments).toEqual([]);
   });
+
+  it('returns url=null when attachment has no url field (e.g., view-once IG)', async () => {
+    const fetcher: typeof fetch = async () =>
+      new Response(JSON.stringify({
+        message: {
+          body: 'hi',
+          attachments: [{ type: 'image' }],  // no url field
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    const client = new RealGhlClient('pit', 'loc', fetcher);
+    const result = await client.getMessage('msg-x');
+    expect(result.text).toBe('hi');
+    expect(result.attachments).toEqual([{ url: null, type: 'image' }]);
+  });
 });
 
 describe('RealGhlClient.addTag', () => {
