@@ -36,7 +36,7 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
     conversationId,
     salon.config.booking_link_dedup_window,
   );
-  const prompt = buildPrompt(salon, ctx, bookingLinkRecentlySent);
+  const prompt = buildPrompt({ salon, ctx, bookingLinkRecentlySent, imagesByMessageId: new Map() });
 
   let llmResult: Awaited<ReturnType<typeof deps.llm.complete>>;
   let attempts = 0;
