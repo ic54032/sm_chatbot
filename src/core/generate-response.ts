@@ -80,10 +80,27 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
       const settled = await Promise.allSettled(
         rawAttachments.map(async (att) => {
           const buf = await fetchFn(att.url, salon.ghlPit);
-          return processImageForVision(buf, {
+          const processed = await processImageForVision(buf, {
             maxDimension: salon.config.image_processing.max_dimension,
             jpegQuality: salon.config.image_processing.jpeg_quality,
           });
+          // DIAGNOSTIC: dimensions + byte ratios. Bot saying "I can't see the
+          // photo details" while imageCount=1 was reaching the LLM call —
+          // likely either GHL CDN serves a thumbnail (low-res input) or our
+          // sharp pipeline is over-compressing. This log decides.
+          logger.info(
+            {
+              messageId: msg.id,
+              url: att.url,
+              bytesIn: processed.bytesIn,
+              bytesOut: processed.bytesOut,
+              width: processed.width,
+              height: processed.height,
+              compressionRatio: (processed.bytesOut / Math.max(processed.bytesIn, 1)).toFixed(2),
+            },
+            'image fetch+process result',
+          );
+          return processed;
         }),
       );
 
