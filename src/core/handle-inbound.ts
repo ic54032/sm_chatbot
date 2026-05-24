@@ -9,6 +9,7 @@ import type { RespondJobData } from '../queue/index.js';
 import { logger } from '../lib/logger.js';
 import { sendCannedReassurance } from './canned-messages.js';
 import { escalateToOwner } from './escalate.js';
+import { parseWebhookAttachments } from '../images/parse-webhook-attachments.js';
 
 export interface HandleInboundInput {
   locationId: string;
@@ -38,23 +39,32 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
 
   const ghl = deps.ghlFor(salon);
 
-  // Always fetch (to get attachments) — even when input.messageText is provided,
-  // we still need the attachments array to classify video/audio/image cases.
+  // Two attachment sources, in priority order:
+  // (1) Webhook payload's attachments_raw field — comes from {{message.attachments}}
+  //     merge tag rendered by the GHL workflow. Available immediately, no API call.
+  // (2) ghl.getMessage(messageId) API response — fallback if webhook is bare.
+  //     Empirically: GHL stopped exposing {{message.id}} merge tag, so this path
+  //     is mostly dead in production. Kept as defensive net for any future where
+  //     a different webhook variant carries message_id but not attachments.
+  const rawPayloadObj =
+    typeof input.rawPayload === 'object' && input.rawPayload !== null
+      ? (input.rawPayload as Record<string, unknown>)
+      : {};
+  const webhookAttachments = parseWebhookAttachments(rawPayloadObj.attachments_raw);
   const fetched = input.messageId
     ? await ghl.getMessage(input.messageId)
     : { text: '', attachments: [] as Array<{ url: string | null; type: 'image' | 'audio' | 'video' }> };
   // Trim to drop whitespace-only inbounds (e.g., accidental empty IG send).
   const textContent = (input.messageText ?? fetched.text ?? '').trim();
-  const attachments = fetched.attachments ?? [];
+  const attachments =
+    webhookAttachments.length > 0
+      ? webhookAttachments
+      : (fetched.attachments ?? []);
 
   // DIAGNOSTIC: dump full inbound shape so we can see what GHL actually sends.
   // Includes raw payload VALUES (not just keys) so we can spot which merge tags
   // resolved to real strings vs empty/null. Remove once attachment plumbing is
   // verified end-to-end.
-  const rawPayloadObj =
-    typeof input.rawPayload === 'object' && input.rawPayload !== null
-      ? (input.rawPayload as Record<string, unknown>)
-      : {};
   logger.info(
     {
       locationId: input.locationId,
@@ -63,9 +73,10 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
       hasMessageText: !!input.messageText,
       webhookTextLen: (input.messageText ?? '').length,
       fetchedTextLen: (fetched.text ?? '').length,
-      apiAttachmentCount: attachments.length,
-      apiAttachmentTypes: attachments.map((a) => a.type),
-      apiAttachmentUrlPresent: attachments.map((a) => !!a.url),
+      webhookAttachmentCount: webhookAttachments.length,
+      webhookAttachmentTypes: webhookAttachments.map((a) => a.type),
+      apiAttachmentCount: (fetched.attachments ?? []).length,
+      finalAttachmentCount: attachments.length,
       rawPayloadFull: rawPayloadObj,
     },
     'inbound classification debug',

@@ -9,7 +9,12 @@ const InboundPayloadSchema = z.object({
   contact_handle: z.string().optional().nullable(),
   message_id: z.string().optional().nullable(),
   message_text: z.string().optional().nullable(),
+  // attachments: legacy field name, kept for back-compat if GHL ever sends it.
   attachments: z.unknown().optional(),
+  // attachments_raw: new field carrying {{message.attachments}} merge-tag output.
+  // GHL renders this as a string (JSON-encoded array, single URL, or comma-list)
+  // depending on the trigger context. parse-webhook-attachments.ts handles all.
+  attachments_raw: z.unknown().optional(),
   conversation_id: z.string().optional().nullable(),
   timestamp: z.string().optional().nullable(),
 });
