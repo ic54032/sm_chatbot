@@ -119,6 +119,32 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
 
   const prompt = buildPrompt({ salon, ctx, bookingLinkRecentlySent, imagesByMessageId });
 
+  // DIAGNOSTIC: confirm whether image content blocks actually reach the LLM call.
+  // Empirical question: bot's response sounded image-aware on first turn but
+  // refused to describe colors on follow-up — could be hallucination from prompt
+  // alone or genuine model behavior. This log tells us definitively.
+  const messageShapes = prompt.messages.map((m, i) => {
+    if (typeof m.content === 'string') {
+      return { idx: i, role: m.role, kind: 'text', textLen: m.content.length, imageCount: 0 };
+    }
+    const blocks = m.content;
+    const imageBlocks = blocks.filter((b) => b.type === 'image');
+    const textBlocks = blocks.filter((b) => b.type === 'text');
+    return {
+      idx: i,
+      role: m.role,
+      kind: 'multimodal',
+      textLen: textBlocks.reduce((s, b) => s + (b.type === 'text' ? b.text.length : 0), 0),
+      imageCount: imageBlocks.length,
+      imageMediaTypes: imageBlocks.map((b) => (b.type === 'image' ? b.mediaType : 'n/a')),
+      imageBase64Lens: imageBlocks.map((b) => (b.type === 'image' ? b.base64.length : 0)),
+    };
+  });
+  logger.info(
+    { conversationId, llmModel: salon.config.llm_model ?? deps.defaultLlmModel, messageShapes },
+    'llm call composition debug',
+  );
+
   let llmResult: Awaited<ReturnType<typeof deps.llm.complete>>;
   let attempts = 0;
   while (true) {
