@@ -14,7 +14,7 @@ const ConfigSchema = z
     anthropicApiKey: z.string().min(1).optional(),
     openaiApiKey: z.string().min(1).optional(),
     geminiApiKey: z.string().min(1).optional(),
-    llmModel: z.string().default('gemini-2.5-flash'),
+    llmModel: z.string().default('gpt-4o'),
     useMockGhl: z
       .string()
       .optional()
