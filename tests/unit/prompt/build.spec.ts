@@ -10,11 +10,14 @@ function makeSalon(): Salon {
     ghlLocationId: 'loc',
     ghlPit: 'pit',
     sourceOfTruth: {
-      salon: {
-        name: 'Test Salon',
-        owner_first_name: 'Sarah',
-        booking_link: 'https://book.test/x',
+      salon_basics: {
+        salon_name: 'Test Salon',
+        owner_first_name: 'Renata',
       },
+      booking: {
+        url: 'https://book.test/x',
+      },
+      price_quoting_policy: 'b',
     } as Salon['sourceOfTruth'],
     config: {
       max_words_per_message: 40,
@@ -123,5 +126,26 @@ describe('buildPrompt multimodal output', () => {
     imgs.set('m2', [img]);  // attempt to attach image to outbound (should be ignored)
     const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: imgs });
     expect(result.messages[1]).toEqual({ role: 'assistant', content: 'a' });
+  });
+
+  it('system prompt contains the verbatim booking URL header', () => {
+    const ctx = baseCtx([makeMsg('m1', 'inbound', 'hi')]);
+    const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
+    expect(result.systemPrompt).toContain('https://book.test/x');
+    expect(result.systemPrompt).toContain('PASTE VERBATIM');
+  });
+
+  it('system prompt contains conversation state and knowledge base sections', () => {
+    const ctx = baseCtx([makeMsg('m1', 'inbound', 'hi')]);
+    const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
+    expect(result.systemPrompt).toContain('# Conversation state');
+    expect(result.systemPrompt).toContain('# Knowledge base');
+    expect(result.systemPrompt).toContain('Total inbound messages this conversation: 1');
+  });
+
+  it('system prompt includes the master prompt body', () => {
+    const ctx = baseCtx([makeMsg('m1', 'inbound', 'hi')]);
+    const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
+    expect(result.systemPrompt).toContain('IDENTITY AND VOICE');
   });
 });
