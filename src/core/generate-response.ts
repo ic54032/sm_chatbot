@@ -226,7 +226,7 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
   let sanitized: Awaited<ReturnType<typeof sanitize>>;
   try {
     sanitized = await sanitize(llmResult.text, {
-      bookingLink: salon.sourceOfTruth.salon.booking_link,
+      bookingLink: salon.sourceOfTruth.booking.url,
       bookingLinkSentInLastN: (n) => eventsRepo.recentBookingLinkSent(deps.db, conversationId, n),
       policy: {
         maxWordsPerMessage: salon.config.max_words_per_message,
@@ -242,7 +242,7 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
       // only the tool call without accompanying text, so we can't rely on the prompt
       // alone to produce the handoff message.
       if (escalationArgs) {
-        const owner = salon.sourceOfTruth.salon.owner_first_name;
+        const owner = salon.sourceOfTruth.salon_basics.owner_first_name;
         const fallback = `let me grab ${owner} for you, she'll jump in as soon as she's between clients 🤍`;
         sanitized = { messages: [fallback], modifications: ['escalation_fallback_text'] };
       } else {
@@ -322,7 +322,7 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
   // Record booking_link_sent event AFTER successful send so the dedup window starts
   // from the next turn, not the current one. Either the LLM declared intent via
   // mark_link_sent or post-sanitize scan found the link in final output.
-  const containsLink = sanitized.messages.some((m) => m.includes(salon.sourceOfTruth.salon.booking_link));
+  const containsLink = sanitized.messages.some((m) => m.includes(salon.sourceOfTruth.booking.url));
   if (linkSentToolCalled || containsLink) {
     await eventsRepo.insert(deps.db, conversationId, 'booking_link_sent', {});
   }

@@ -133,7 +133,7 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
   // Hard escalation prečaci — skip respond queue entirely for media we can't handle.
   // Canned reassurance is best-effort; escalation always proceeds (graceful degradation
   // when outside 24h IG window, etc.).
-  const owner = salon.sourceOfTruth.salon.owner_first_name;
+  const owner = salon.sourceOfTruth.salon_basics.owner_first_name;
 
   const tryCannedAndEscalate = async (message: string, reason: string): Promise<void> => {
     try {

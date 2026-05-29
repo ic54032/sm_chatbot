@@ -45,23 +45,14 @@ const fakeSalon: Salon = {
   ghlPit: 'pit-1',
   isActive: true,
   sourceOfTruth: {
-    salon: {
-      name: 'Bella Hair Studio',
+    salon_basics: {
+      salon_name: 'Bella Hair Studio',
       owner_first_name: 'Sarah',
-      location: 'Toronto, ON',
-      timezone: 'America/Toronto',
-      hours: { mon: 'closed', tue: '10:00-19:00' },
-      booking_link: 'https://bellahair.example.com/book',
     },
-    stylists: [{ name: 'Sarah', specialties: ['balayage'] }],
-    services: [
-      {
-        name: 'Balayage',
-        price_range: { min: 250, max: 400, currency: 'CAD' },
-        requires_consultation: true,
-      },
-    ],
-    voice: { tone_notes: 'Warm, casual' },
+    booking: {
+      url: 'https://bellahair.example.com/book',
+    },
+    price_quoting_policy: 'b',
   },
   config: {
     response_delay_ms: 100,

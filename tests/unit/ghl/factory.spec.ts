@@ -13,7 +13,7 @@ function makeSalon(id: string, pit = 'pit', locationId = 'loc-1'): Salon {
     ghlLocationId: locationId,
     ghlPit: pit,
     isActive: true,
-    sourceOfTruth: { salon: { booking_link: 'https://x/book' } } as Salon['sourceOfTruth'],
+    sourceOfTruth: { salon_basics: { owner_first_name: 'X', salon_name: 'X' }, booking: { url: 'https://x/book' }, price_quoting_policy: 'b' } as Salon['sourceOfTruth'],
     config: {} as Salon['config'],
   };
 }

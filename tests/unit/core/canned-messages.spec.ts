@@ -9,7 +9,7 @@ function makeSalon(): Salon {
     displayName: 'Test',
     ghlLocationId: 'loc1',
     ghlPit: 'pit',
-    sourceOfTruth: { salon: { owner_first_name: 'Sarah' } } as Salon['sourceOfTruth'],
+    sourceOfTruth: { salon_basics: { owner_first_name: 'Sarah', salon_name: 'Test' }, booking: { url: 'https://book.test/x' }, price_quoting_policy: 'b' } as Salon['sourceOfTruth'],
     config: {} as Salon['config'],
     isActive: true,
   };
