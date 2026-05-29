@@ -43,7 +43,8 @@ describe('e2e #2 — booking link dedup across turns', () => {
       config: fixture.config,
     });
 
-    const linkResponse = 'Sure! Book here https://bellahair.example.com/book';
+    const bookingUrl = fixture.source_of_truth.booking.url;
+    const linkResponse = `Sure! Book here ${bookingUrl}`;
     llm.stage({ match: () => true, output: { text: linkResponse } });
 
     await testApp.app.inject({
@@ -59,7 +60,7 @@ describe('e2e #2 — booking link dedup across turns', () => {
       .selectAll()
       .execute();
     expect(outboundsTurn1).toHaveLength(1);
-    expect(outboundsTurn1[0].text_content).toContain('https://bellahair.example.com/book');
+    expect(outboundsTurn1[0].text_content).toContain(bookingUrl);
 
     // Same response staged for turn 2; sanitizer should strip the link.
     await testApp.app.inject({
@@ -76,7 +77,7 @@ describe('e2e #2 — booking link dedup across turns', () => {
       .selectAll()
       .execute();
     expect(outboundsAll).toHaveLength(2);
-    expect(outboundsAll[1].text_content).not.toContain('https://bellahair.example.com/book');
+    expect(outboundsAll[1].text_content).not.toContain(bookingUrl);
     const sanitizeMods = outboundsAll[1].sanitize_mods as string[];
     expect(sanitizeMods).toContain('booking_link_deduplicated');
   });
