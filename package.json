@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-assets.mjs",
     "start": "node dist/index.js",
     "migrate:up": "tsx src/db/migrate.ts up",
     "migrate:up:prod": "node dist/db/migrate.js up",
