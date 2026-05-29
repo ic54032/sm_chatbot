@@ -34,7 +34,7 @@ describe('e2e #3 — escalate_to_owner tool', () => {
   });
 
   it('sets handoff, adds tag, updates field, and sends canned reassurance', async () => {
-    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-bella.json'), 'utf8'));
+    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-lumen.json'), 'utf8'));
     const salon = await salonsRepo.create(db, {
       displayName: fixture.display_name,
       ghlLocationId: fixture.ghl_location_id,
@@ -64,7 +64,7 @@ describe('e2e #3 — escalate_to_owner tool', () => {
     // worse UX. Verify the fallback fired and contains the owner's first name.
     const outbound = await db.selectFrom('messages').where('direction', '=', 'outbound').selectAll().execute();
     expect(outbound).toHaveLength(1);
-    expect(outbound[0].text_content).toContain(fixture.source_of_truth.salon.owner_first_name);
+    expect(outbound[0].text_content).toContain(fixture.source_of_truth.salon_basics.owner_first_name);
 
     const conv = await db
       .selectFrom('conversations')

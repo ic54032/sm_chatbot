@@ -34,7 +34,7 @@ describe('e2e #2 — booking link dedup across turns', () => {
   });
 
   it('first turn keeps link, second turn strips it', async () => {
-    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-bella.json'), 'utf8'));
+    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-lumen.json'), 'utf8'));
     const salon = await salonsRepo.create(db, {
       displayName: fixture.display_name,
       ghlLocationId: fixture.ghl_location_id,

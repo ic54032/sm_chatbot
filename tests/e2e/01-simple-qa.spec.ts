@@ -34,7 +34,7 @@ describe('e2e #1 — simple Q&A', () => {
   });
 
   it('responds with sanitized text and persists outbound', async () => {
-    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-bella.json'), 'utf8'));
+    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-lumen.json'), 'utf8'));
     const salon = await salonsRepo.create(db, {
       displayName: fixture.display_name,
       ghlLocationId: fixture.ghl_location_id,

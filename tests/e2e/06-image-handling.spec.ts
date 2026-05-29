@@ -39,7 +39,7 @@ describe('e2e #6 — image handling', () => {
   });
 
   it('inbound with image attachment results in vision LLM call and outbound reply', async () => {
-    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-bella.json'), 'utf8'));
+    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-lumen.json'), 'utf8'));
     const salon = await salonsRepo.create(db, {
       displayName: fixture.display_name,
       ghlLocationId: fixture.ghl_location_id,
@@ -65,7 +65,7 @@ describe('e2e #6 — image handling', () => {
           (b) => typeof b === 'object' && b !== null && 'type' in b && b.type === 'image',
         );
       },
-      output: { text: `love that 🤍 grab a consultation here ${fixture.source_of_truth.salon.booking_link}` },
+      output: { text: `love that 🤍 grab a consultation here ${fixture.source_of_truth.booking.url}` },
     });
 
     // POST to the real webhook (not dev-simulate) so we can include `attachments` inline.
@@ -113,7 +113,7 @@ describe('e2e #6 — image handling', () => {
   });
 
   it('inbound with video attachment escalates without LLM call', async () => {
-    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-bella.json'), 'utf8'));
+    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-lumen.json'), 'utf8'));
     const salon = await salonsRepo.create(db, {
       displayName: fixture.display_name,
       ghlLocationId: fixture.ghl_location_id,

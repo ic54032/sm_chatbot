@@ -48,7 +48,7 @@ describe('e2e #4 — auto-resume after timeout', () => {
   });
 
   it('clears handoff, removes tag, records event when handoff_until in past', async () => {
-    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-bella.json'), 'utf8'));
+    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-lumen.json'), 'utf8'));
     const salon = await salonsRepo.create(db, {
       displayName: fixture.display_name,
       ghlLocationId: fixture.ghl_location_id,

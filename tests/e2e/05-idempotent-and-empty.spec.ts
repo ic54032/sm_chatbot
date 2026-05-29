@@ -34,7 +34,7 @@ describe('e2e #5 — idempotent inbound and sanitizer empty escalates', () => {
   });
 
   it('duplicate ghl_message_id ingested only once', async () => {
-    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-bella.json'), 'utf8'));
+    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-lumen.json'), 'utf8'));
     const salon = await salonsRepo.create(db, {
       displayName: fixture.display_name,
       ghlLocationId: fixture.ghl_location_id,
@@ -65,7 +65,7 @@ describe('e2e #5 — idempotent inbound and sanitizer empty escalates', () => {
   });
 
   it('LLM output that sanitizes to empty triggers escalation', async () => {
-    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-bella.json'), 'utf8'));
+    const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-lumen.json'), 'utf8'));
     const salon = await salonsRepo.create(db, {
       displayName: fixture.display_name,
       ghlLocationId: fixture.ghl_location_id,

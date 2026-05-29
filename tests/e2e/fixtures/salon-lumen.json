@@ -1,0 +1,38 @@
+{
+  "display_name": "Lumen Hair Studio",
+  "ghl_location_id": "loc_lumen_test",
+  "ghl_pit": "test-pit",
+  "source_of_truth": {
+    "salon_basics": {
+      "salon_name": "Lumen Hair Studio",
+      "owner_first_name": "Renata",
+      "address": "1847 Pearl Street, Suite 3, Denver, CO 80203",
+      "instagram_handle": "@lumenhairstudio",
+      "website_url": "https://lumenhairstudio.com"
+    },
+    "booking": {
+      "platform": "GlossGenius",
+      "url": "https://lumenhairstudio.glossgenius.com/book",
+      "consultations_bookable_here": true
+    },
+    "price_quoting_policy": "b",
+    "service_menu": {
+      "color": "Balayage, foilayage, highlights, root touch-ups, color correction by Renata."
+    },
+    "pricing": [
+      { "service_name": "Full Balayage", "category": "Color", "price": "$220-$320" }
+    ],
+    "policies": {
+      "cancellation": "24 hour notice required."
+    },
+    "voice_and_tone_notes": "Warm but grounded, not bubbly or salesy."
+  },
+  "config": {
+    "response_delay_ms": 100,
+    "ghl_custom_field_ids": {
+      "needs_owner_attention": "field_attn",
+      "bot_paused_until": "field_paused",
+      "last_escalation_reason": "field_reason"
+    }
+  }
+}
