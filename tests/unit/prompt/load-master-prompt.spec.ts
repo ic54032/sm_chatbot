@@ -14,6 +14,10 @@ describe('loadMasterPrompt', () => {
     expect(prompt).toContain('PHOTO HANDLING');
     expect(prompt).toContain('TOOL USAGE');
     expect(prompt).toContain('PRICE QUOTING');
+    // New sections added in the finalized master prompt — catch accidental loss.
+    expect(prompt).toContain('Consultation refusal escalation');
+    expect(prompt).toContain('Tier 2');
+    expect(prompt).toContain('When a client references an attachment you don');
   });
 
   it('contains the heart emoji, not the mojibake artifact', () => {
