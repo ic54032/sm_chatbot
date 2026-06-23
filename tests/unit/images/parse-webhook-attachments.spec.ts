@@ -89,6 +89,49 @@ describe('parseWebhookAttachments', () => {
     });
   });
 
+  describe('URL extension type inference', () => {
+    it('detects video from .mp4 extension', () => {
+      expect(parseWebhookAttachments('https://x.test/clip.mp4')).toEqual([
+        { url: 'https://x.test/clip.mp4', type: 'video' },
+      ]);
+    });
+    it('detects video from .mov / .webm / .m4v', () => {
+      expect(parseWebhookAttachments('https://x.test/a.mov')[0].type).toBe('video');
+      expect(parseWebhookAttachments('https://x.test/a.webm')[0].type).toBe('video');
+      expect(parseWebhookAttachments('https://x.test/a.m4v')[0].type).toBe('video');
+    });
+    it('detects audio from .mp3 / .m4a / .ogg / .wav', () => {
+      expect(parseWebhookAttachments('https://x.test/a.mp3')[0].type).toBe('audio');
+      expect(parseWebhookAttachments('https://x.test/a.m4a')[0].type).toBe('audio');
+      expect(parseWebhookAttachments('https://x.test/a.ogg')[0].type).toBe('audio');
+      expect(parseWebhookAttachments('https://x.test/a.wav')[0].type).toBe('audio');
+    });
+    it('still defaults to image for .jpeg / .png / no extension', () => {
+      expect(parseWebhookAttachments('https://x.test/a.jpeg')[0].type).toBe('image');
+      expect(parseWebhookAttachments('https://x.test/a.png')[0].type).toBe('image');
+      expect(parseWebhookAttachments('https://x.test/a')[0].type).toBe('image');
+    });
+    it('detects extension despite query string', () => {
+      expect(parseWebhookAttachments('https://x.test/clip.mp4?token=abc')[0].type).toBe('video');
+      expect(parseWebhookAttachments('https://x.test/voice.m4a?sig=xyz')[0].type).toBe('audio');
+    });
+    it('infers per-URL type in comma-separated list (mixed media)', () => {
+      const input = 'https://x.test/a.jpg, https://x.test/b.mp4, https://x.test/c.mp3';
+      expect(parseWebhookAttachments(input)).toEqual([
+        { url: 'https://x.test/a.jpg', type: 'image' },
+        { url: 'https://x.test/b.mp4', type: 'video' },
+        { url: 'https://x.test/c.mp3', type: 'audio' },
+      ]);
+    });
+    it('infers type for URL strings inside a JSON array', () => {
+      const input = '["https://x.test/a.jpg","https://x.test/b.mp4"]';
+      expect(parseWebhookAttachments(input)).toEqual([
+        { url: 'https://x.test/a.jpg', type: 'image' },
+        { url: 'https://x.test/b.mp4', type: 'video' },
+      ]);
+    });
+  });
+
   describe('direct array inputs (not strings)', () => {
     it('handles array of objects directly', () => {
       const input = [{ url: 'https://x.test/a.jpg', type: 'image' }];

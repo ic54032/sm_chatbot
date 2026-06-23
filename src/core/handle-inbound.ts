@@ -88,9 +88,27 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
   const imagesMissingUrl = attachments.filter((a) => a.type === 'image' && !a.url);
 
   if (!textContent && attachments.length === 0) {
+    // Observability for the "view-once / unsupported media" hypothesis: if
+    // attachments_raw was present in the webhook but parsed to nothing, that's
+    // a different signal than a truly empty event. We log it distinctly so we
+    // can decide on a behavior change once we have empirical data from real
+    // view-once payloads. Behavior here is unchanged — both branches drop.
+    const attachmentsRawValue = rawPayloadObj.attachments_raw;
+    const attachmentsRawPresent =
+      attachmentsRawValue !== null &&
+      attachmentsRawValue !== undefined &&
+      (typeof attachmentsRawValue !== 'string' ||
+        (attachmentsRawValue.trim() !== '' && attachmentsRawValue.trim() !== 'null'));
     logger.warn(
-      { locationId: input.locationId, contactId: input.contactId },
-      'inbound has no text and no attachments; dropping',
+      {
+        locationId: input.locationId,
+        contactId: input.contactId,
+        attachmentsRawPresent,
+        attachmentsRawValue,
+      },
+      attachmentsRawPresent
+        ? 'inbound has no text and no parseable attachments but attachments_raw was present; dropping (possible view-once / unsupported media)'
+        : 'inbound has no text and no attachments; dropping',
     );
     return;
   }

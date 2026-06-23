@@ -11,6 +11,19 @@ export interface WebhookAttachment {
 
 const URL_REGEX = /^https?:\/\//;
 
+// Detect media type from URL extension. GHL's merge tag system doesn't pass
+// the original content_type alongside the URL, so we infer from path. Anything
+// that doesn't match a known video/audio extension defaults to image (the most
+// common case in IG DMs).
+const VIDEO_EXT_REGEX = /\.(mp4|mov|webm|m4v|avi|mkv)(?:\?|#|$)/i;
+const AUDIO_EXT_REGEX = /\.(mp3|m4a|ogg|wav|aac|opus)(?:\?|#|$)/i;
+
+function inferTypeFromUrl(url: string): 'image' | 'audio' | 'video' {
+  if (VIDEO_EXT_REGEX.test(url)) return 'video';
+  if (AUDIO_EXT_REGEX.test(url)) return 'audio';
+  return 'image';
+}
+
 export function parseWebhookAttachments(rawValue: unknown): WebhookAttachment[] {
   if (rawValue === null || rawValue === undefined) return [];
 
@@ -36,12 +49,12 @@ export function parseWebhookAttachments(rawValue: unknown): WebhookAttachment[] 
         .split(',')
         .map((p) => p.trim())
         .filter((p) => URL_REGEX.test(p));
-      if (parts.length > 0) return parts.map((url) => ({ url, type: 'image' as const }));
+      if (parts.length > 0) return parts.map((url) => ({ url, type: inferTypeFromUrl(url) }));
     }
 
     // 1c. Single URL string.
     if (URL_REGEX.test(trimmed)) {
-      return [{ url: trimmed, type: 'image' }];
+      return [{ url: trimmed, type: inferTypeFromUrl(trimmed) }];
     }
 
     return [];
@@ -64,7 +77,7 @@ function normalizeArray(items: unknown[]): WebhookAttachment[] {
   const result: WebhookAttachment[] = [];
   for (const item of items) {
     if (typeof item === 'string' && URL_REGEX.test(item)) {
-      result.push({ url: item, type: 'image' });
+      result.push({ url: item, type: inferTypeFromUrl(item) });
       continue;
     }
     if (typeof item !== 'object' || item === null) continue;
