@@ -61,7 +61,7 @@ const fakeSalon: Salon = {
   config: {
     response_delay_ms: 100,
     handoff_window_hours: 4,
-    booking_link_dedup_window: 3,
+    booking_link_dedup_window_hours: 3,
     max_words_per_message: 40,
     max_emojis: 2,
     ghl_custom_field_ids: {

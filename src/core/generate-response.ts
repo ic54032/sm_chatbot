@@ -43,7 +43,7 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
   const bookingLinkRecentlySent = await eventsRepo.recentBookingLinkSent(
     deps.db,
     conversationId,
-    salon.config.booking_link_dedup_window,
+    salon.config.booking_link_dedup_window_hours,
   );
 
   // ── Image orchestration ─────────────────────────────────────────────────────
@@ -227,11 +227,11 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
   try {
     sanitized = await sanitize(llmResult.text, {
       bookingLink: salon.sourceOfTruth.booking.url,
-      bookingLinkSentInLastN: (n) => eventsRepo.recentBookingLinkSent(deps.db, conversationId, n),
+      bookingLinkSentInLastNHours: (hours) => eventsRepo.recentBookingLinkSent(deps.db, conversationId, hours),
       policy: {
         maxWordsPerMessage: salon.config.max_words_per_message,
         maxEmojis: salon.config.max_emojis,
-        bookingLinkDedupWindow: salon.config.booking_link_dedup_window,
+        bookingLinkDedupWindowHours: salon.config.booking_link_dedup_window_hours,
       },
     });
   } catch (err) {

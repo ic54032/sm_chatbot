@@ -22,7 +22,7 @@ function makeSalon(): Salon {
     config: {
       max_words_per_message: 40,
       max_emojis: 2,
-      booking_link_dedup_window: 3,
+      booking_link_dedup_window_hours: 3,
       response_delay_ms: 40_000,
       handoff_window_hours: 4,
       ghl_custom_field_ids: { needs_owner_attention: 'a', bot_paused_until: 'b', last_escalation_reason: 'c' },

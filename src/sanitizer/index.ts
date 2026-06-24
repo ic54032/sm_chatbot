@@ -3,11 +3,11 @@ import { splitOnSentenceBoundaries } from './split.js';
 
 export interface SanitizeContext {
   bookingLink: string;
-  bookingLinkSentInLastN: (n: number) => Promise<boolean>;
+  bookingLinkSentInLastNHours: (hours: number) => Promise<boolean>;
   policy: {
     maxWordsPerMessage: number;
     maxEmojis: number;
-    bookingLinkDedupWindow: number;
+    bookingLinkDedupWindowHours: number;
   };
 }
 
@@ -61,7 +61,7 @@ export async function sanitize(raw: string, ctx: SanitizeContext): Promise<Sanit
 
   // 6. Booking link dedup (exact match check via array, not substring).
   if (links.includes(ctx.bookingLink)) {
-    if (await ctx.bookingLinkSentInLastN(ctx.policy.bookingLinkDedupWindow)) {
+    if (await ctx.bookingLinkSentInLastNHours(ctx.policy.bookingLinkDedupWindowHours)) {
       text = text.replace(ctx.bookingLink, '').replace(/\s+/g, ' ').trim();
       mods.push('booking_link_deduplicated');
     }

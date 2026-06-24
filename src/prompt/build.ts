@@ -27,7 +27,7 @@ The booking URL is: ${bookingUrl}
 Paste it exactly, character for character, whenever you share it. Never paraphrase, shorten, or describe it.`;
 
   const conversationState = `# Conversation state
-- Booking link sent in last ${salon.config.booking_link_dedup_window} messages: ${bookingLinkRecentlySent}
+- Booking link sent recently (within last ${salon.config.booking_link_dedup_window_hours}h): ${bookingLinkRecentlySent}
 - Total inbound messages this conversation: ${inboundCount}
 - State flags JSON: ${JSON.stringify(state)}`;
 

@@ -11,18 +11,12 @@ export async function insert(db: Db, conversationId: string, eventType: string, 
     .execute();
 }
 
-export async function recentBookingLinkSent(db: Db, conversationId: string, withinLastN: number): Promise<boolean> {
-  const cutoffRow = await db
-    .selectFrom('messages')
-    .where('conversation_id', '=', conversationId)
-    .where('direction', '=', 'outbound')
-    .orderBy('created_at', 'desc')
-    .offset(withinLastN - 1)
-    .limit(1)
-    .select('created_at')
-    .executeTakeFirst();
-
-  const cutoff = cutoffRow?.created_at ?? new Date(0);
+export async function recentBookingLinkSent(db: Db, conversationId: string, withinHours: number): Promise<boolean> {
+  // Time-based dedup: was a booking_link_sent event recorded for this
+  // conversation within the last `withinHours` hours? Previously this was
+  // based on a count of outbound messages; switched to wall-clock time so
+  // a multi-day conversation re-paste the link after a 24h+ gap.
+  const cutoff = new Date(Date.now() - withinHours * 3600 * 1000);
 
   const found = await db
     .selectFrom('conversation_events')

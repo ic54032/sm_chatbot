@@ -9,8 +9,8 @@ const inputs = readdirSync(fixturesDir).filter((f) => f.endsWith('.input.txt'));
 
 const baseCtx = {
   bookingLink: 'https://example.com/book',
-  bookingLinkSentInLastN: async () => false,
-  policy: { maxWordsPerMessage: 40, maxEmojis: 2, bookingLinkDedupWindow: 3 },
+  bookingLinkSentInLastNHours: async () => false,
+  policy: { maxWordsPerMessage: 40, maxEmojis: 2, bookingLinkDedupWindowHours: 3 },
 };
 
 describe('sanitizer fixture corpus', () => {

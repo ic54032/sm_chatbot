@@ -3,8 +3,8 @@ import { sanitize } from '../../../src/sanitizer/index.js';
 
 const baseCtx = {
   bookingLink: 'https://example.com/book',
-  bookingLinkSentInLastN: async () => false,
-  policy: { maxWordsPerMessage: 40, maxEmojis: 2, bookingLinkDedupWindow: 3 },
+  bookingLinkSentInLastNHours: async () => false,
+  policy: { maxWordsPerMessage: 40, maxEmojis: 2, bookingLinkDedupWindowHours: 3 },
 };
 
 describe('sanitizer — forbidden chars', () => {
@@ -66,7 +66,7 @@ describe('sanitizer — links', () => {
   it('removes booking link if recently sent', async () => {
     const result = await sanitize('Book here https://example.com/book today', {
       ...baseCtx,
-      bookingLinkSentInLastN: async () => true,
+      bookingLinkSentInLastNHours: async () => true,
     });
     expect(result.messages[0]).not.toContain('https://example.com/book');
     expect(result.modifications).toContain('booking_link_deduplicated');
@@ -106,7 +106,7 @@ describe('sanitizer — bug regressions', () => {
   it('strips trailing period from captured URL (dedup recognizes link with sentence period)', async () => {
     const result = await sanitize('Book at https://example.com/book.', {
       ...baseCtx,
-      bookingLinkSentInLastN: async () => true,
+      bookingLinkSentInLastNHours: async () => true,
     });
     // Booking link should be stripped because it was recognized despite trailing period
     expect(result.messages[0]).not.toContain('https://example.com/book');
