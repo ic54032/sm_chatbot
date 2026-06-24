@@ -10,6 +10,7 @@ import { sanitize } from '../sanitizer/index.js';
 import { buildPrompt } from '../prompt/build.js';
 import { allTools } from '../prompt/tools.js';
 import { escalateToOwner } from './escalate.js';
+import { containsHandoffPromise } from './detect-handoff-promise.js';
 import { GhlApiError } from '../ghl/errors.js';
 import { SanitizerEmptyOutputError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
@@ -221,6 +222,22 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
         logger.warn({ conversationId, key }, 'rejected unknown state flag');
       }
     }
+  }
+
+  // Safety net for LLM tool-call reliability: if the model wrote handoff-promise
+  // language ("let me grab Renata", "I'll let her know") but didn't fire
+  // escalate_to_owner, force the escalation anyway. The customer was already
+  // promised the owner is coming — failing to follow through breaks trust and
+  // leaves the conversation silently un-handed-off.
+  if (!escalationArgs && containsHandoffPromise(llmResult.text)) {
+    logger.warn(
+      { conversationId, textPreview: llmResult.text.slice(0, 200) },
+      'bot promised handoff in reply but did not call escalate_to_owner; forcing escalation',
+    );
+    escalationArgs = {
+      reason: 'implied_handoff_no_tool_call',
+      contextSummary: llmResult.text.slice(0, 200),
+    };
   }
 
   let sanitized: Awaited<ReturnType<typeof sanitize>>;
