@@ -20,6 +20,19 @@ export async function findByLocationId(
   return rowToSalon({ ...row, ghl_pit: pit });
 }
 
+/**
+ * Lightweight listing for the health-check worker: every salon regardless of
+ * is_active (a disabled salon is precisely what the check must surface).
+ * Deliberately skips PIT decryption and SOT/config parsing — no secrets leave
+ * the DB layer for a monitoring pass.
+ */
+export async function listAllForHealthCheck(
+  db: Db,
+): Promise<Array<{ id: string; displayName: string; isActive: boolean }>> {
+  const rows = await db.selectFrom('salons').select(['id', 'display_name', 'is_active']).execute();
+  return rows.map((r) => ({ id: r.id, displayName: r.display_name, isActive: r.is_active }));
+}
+
 export async function setActive(db: Db, id: string, active: boolean): Promise<void> {
   await db
     .updateTable('salons')

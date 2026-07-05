@@ -64,3 +64,17 @@ export async function insertOutbound(db: Db, input: InsertOutboundInput): Promis
     .executeTakeFirstOrThrow();
   return { id: row.id };
 }
+
+/** Count inbound messages for a salon in [from, to). Used by the health check. */
+export async function countInboundForSalon(db: Db, salonId: string, from: Date, to: Date): Promise<number> {
+  const row = await db
+    .selectFrom('messages')
+    .innerJoin('conversations', 'conversations.id', 'messages.conversation_id')
+    .where('conversations.salon_id', '=', salonId)
+    .where('messages.direction', '=', 'inbound')
+    .where('messages.created_at', '>=', from)
+    .where('messages.created_at', '<', to)
+    .select((eb) => eb.fn.countAll().as('n'))
+    .executeTakeFirst();
+  return Number(row?.n ?? 0);
+}

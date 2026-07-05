@@ -30,6 +30,16 @@ const ConfigSchema = z
       .optional()
       .transform((v) => (v && v.trim() !== '' ? v : undefined))
       .pipe(z.string().min(43).max(45).optional()),
+    // Slack/Discord-compatible incoming webhook for operational alerts
+    // (health check findings). When unset, alerts only go to structured logs.
+    opsAlertWebhookUrl: z
+      .string()
+      .optional()
+      .transform((v) => (v && v.trim() !== '' ? v : undefined))
+      .pipe(z.string().url().optional()),
+    // A salon must average at least this many inbound DMs/day (over the prior
+    // 14 days) before a silent 24h counts as an anomaly worth alerting on.
+    healthcheckMinDailyAvg: z.coerce.number().positive().default(2),
   })
   .superRefine((cfg, ctx) => {
     const requiredKey = {
@@ -66,5 +76,7 @@ export function loadConfig(): AppConfig {
     ghlApiBaseUrl: process.env.GHL_API_BASE_URL,
     ghlApiVersion: process.env.GHL_API_VERSION,
     pitEncryptionKey: process.env.PIT_ENCRYPTION_KEY,
+    opsAlertWebhookUrl: process.env.OPS_ALERT_WEBHOOK_URL,
+    healthcheckMinDailyAvg: process.env.HEALTHCHECK_MIN_DAILY_AVG,
   });
 }
