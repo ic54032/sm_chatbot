@@ -14,6 +14,14 @@ export const SotSchema = z
       })
       .passthrough(),
     price_quoting_policy: z.enum(['a', 'b', 'c']),
+    // Optional: services the salon explicitly does not offer ("nails", "perms").
+    // The master prompt answers these with a warm no instead of escalating.
+    service_menu: z
+      .object({
+        not_offered: z.array(z.string()).default([]),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 

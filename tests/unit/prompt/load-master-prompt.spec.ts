@@ -14,10 +14,18 @@ describe('loadMasterPrompt', () => {
     expect(prompt).toContain('PHOTO HANDLING');
     expect(prompt).toContain('TOOL USAGE');
     expect(prompt).toContain('PRICE QUOTING');
-    // New sections added in the finalized master prompt — catch accidental loss.
-    expect(prompt).toContain('Consultation refusal escalation');
-    expect(prompt).toContain('Tier 2');
-    expect(prompt).toContain('When a client references an attachment you don');
+    // v3 sections — catch accidental loss on future prompt swaps.
+    expect(prompt).toContain('IDENTITY QUESTIONS AND DISCLOSURE');
+    expect(prompt).toContain('Time awareness');
+    expect(prompt).toContain('service_menu.not_offered');
+    expect(prompt).toContain('When a client references an attachment that is not visible');
+    expect(prompt).toContain('No follow-up promises');
+    expect(prompt).toContain('Send the link on turn 1');
+    // Local hardening ported across swaps: the sanitizer-strip colon warning
+    // and the state label matching build.ts ("sent recently", not "in last N messages").
+    expect(prompt).toContain('Booking link sent recently');
+    expect(prompt).toContain('dangling colon');
+    expect(prompt).not.toContain('sent in last N messages');
   });
 
   it('contains the heart emoji, not the mojibake artifact', () => {

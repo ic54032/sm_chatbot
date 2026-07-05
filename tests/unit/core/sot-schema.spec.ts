@@ -55,4 +55,27 @@ describe('SotSchema', () => {
     const bad = { ...validSot, price_quoting_policy: 'x' };
     expect(() => SotSchema.parse(bad)).toThrow();
   });
+
+  it('accepts service_menu.not_offered as string array and preserves it', () => {
+    const sot = { ...validSot, service_menu: { color: 'balayage', not_offered: ['nails', 'perms'] } };
+    const parsed = SotSchema.parse(sot);
+    expect(parsed.service_menu?.not_offered).toEqual(['nails', 'perms']);
+    expect((parsed.service_menu as Record<string, unknown>).color).toBe('balayage');
+  });
+
+  it('defaults not_offered to empty array when service_menu is present without it', () => {
+    const parsed = SotSchema.parse(validSot);
+    expect(parsed.service_menu?.not_offered).toEqual([]);
+  });
+
+  it('still validates when service_menu is entirely absent (legacy rows)', () => {
+    const { service_menu: _omit, ...noMenu } = validSot;
+    const parsed = SotSchema.parse(noMenu);
+    expect(parsed.service_menu).toBeUndefined();
+  });
+
+  it('rejects non-string entries in not_offered', () => {
+    const bad = { ...validSot, service_menu: { not_offered: [42] } };
+    expect(() => SotSchema.parse(bad)).toThrow();
+  });
 });

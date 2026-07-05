@@ -15,6 +15,23 @@ export interface BuildPromptOutput {
   messages: Array<{ role: 'user' | 'assistant'; content: string | ContentBlock[] }>;
 }
 
+/**
+ * Hours between the start of the current client message burst (the trailing
+ * run of consecutive inbounds) and whatever message came before it. This is
+ * the gap the prompt's "fresh exchange after ~12h" rule cares about. Computed
+ * from the burst START so rapid multi-message batches after a long silence
+ * still report the long gap, not the seconds between batched messages.
+ * Returns null when there is no message before the burst (new conversation).
+ */
+export function hoursSinceLastClientMessage(messages: ConversationContext['recentMessages'], now: Date = new Date()): number | null {
+  let i = messages.length - 1;
+  while (i >= 0 && messages[i].direction === 'inbound') i--;
+  if (i < 0) return null; // conversation is all inbound so far — nothing to measure against
+  const burstStart = messages[i + 1]?.createdAt ?? now;
+  const gapMs = burstStart.getTime() - messages[i].createdAt.getTime();
+  return Math.max(0, Math.round(gapMs / 3_600_000));
+}
+
 export function buildPrompt(input: BuildPromptInput): BuildPromptOutput {
   const { salon, ctx, bookingLinkRecentlySent, imagesByMessageId } = input;
   const sot = salon.sourceOfTruth;
@@ -26,10 +43,38 @@ export function buildPrompt(input: BuildPromptInput): BuildPromptOutput {
 The booking URL is: ${bookingUrl}
 Paste it exactly, character for character, whenever you share it. Never paraphrase, shorten, or describe it.`;
 
-  const conversationState = `# Conversation state
-- Booking link sent recently (within last ${salon.config.booking_link_dedup_window_hours}h): ${bookingLinkRecentlySent}
-- Total inbound messages this conversation: ${inboundCount}
-- State flags JSON: ${JSON.stringify(state)}`;
+  const stateLines = [
+    `- Booking link sent recently (within last ${salon.config.booking_link_dedup_window_hours}h): ${bookingLinkRecentlySent}`,
+    `- Total inbound messages this conversation: ${inboundCount}`,
+    `- State flags JSON: ${JSON.stringify(state)}`,
+  ];
+
+  // Time awareness (master prompt Section 2): both lines are optional by
+  // contract — the prompt falls back to safe behavior when they are absent.
+  if (salon.config.timezone) {
+    try {
+      const nowLocal = new Intl.DateTimeFormat('en-US', {
+        timeZone: salon.config.timezone,
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      }).format(new Date());
+      stateLines.push(`- Current date and time (salon local): ${nowLocal}`);
+    } catch {
+      // Invalid IANA name in config — omit the line (prompt handles absence)
+      // rather than killing the whole response.
+    }
+  }
+  const gapHours = hoursSinceLastClientMessage(ctx.recentMessages);
+  if (gapHours !== null) {
+    stateLines.push(`- Hours since last client message: ${gapHours}`);
+  }
+
+  const conversationState = `# Conversation state\n${stateLines.join('\n')}`;
 
   const knowledgeBase = `# Knowledge base
 ${JSON.stringify(sot, null, 2)}`;

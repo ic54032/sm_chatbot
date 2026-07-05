@@ -16,7 +16,9 @@ services:
   redis-test:
     image: redis:7-alpine
     ports:
-      - "56379:6379"
+      # 57379 avoids Windows Hyper-V excluded port ranges (56280-56592 on this
+      # machine; check: netsh interface ipv4 show excludedportrange protocol=tcp)
+      - "57379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

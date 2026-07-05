@@ -7,7 +7,6 @@ import * as conversationsRepo from '../db/repos/conversations.js';
 import * as messagesRepo from '../db/repos/messages.js';
 import type { RespondJobData } from '../queue/index.js';
 import { logger } from '../lib/logger.js';
-import { sendCannedReassurance } from './canned-messages.js';
 import { escalateToOwner } from './escalate.js';
 import { parseWebhookAttachments } from '../images/parse-webhook-attachments.js';
 
@@ -148,39 +147,19 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
     return;
   }
 
-  // Hard escalation prečaci — skip respond queue entirely for media we can't handle.
-  // Canned reassurance is best-effort; escalation always proceeds (graceful degradation
-  // when outside 24h IG window, etc.).
-  const owner = salon.sourceOfTruth.salon_basics.owner_first_name;
+  // Hard escalation prečaci — skip respond queue entirely for media we can't
+  // handle. Silent by design: no reply goes to the client, the owner picks the
+  // conversation up from the escalation notification and answers personally.
+  const escalationReason = hasVideo
+    ? 'video_attachment'
+    : hasAudio
+      ? 'audio_attachment'
+      : imagesMissingUrl.length > 0
+        ? 'image_without_url'
+        : null;
 
-  const tryCannedAndEscalate = async (message: string, reason: string): Promise<void> => {
-    try {
-      await sendCannedReassurance({ db: deps.db, ghl }, salon, conversation, message);
-    } catch (err) {
-      logger.warn({ err, conversationId: conversation.id }, 'canned reassurance failed; proceeding with escalation');
-    }
-    await escalateToOwner({ db: deps.db, ghl, salon, conversation, reason });
-  };
-
-  if (hasVideo) {
-    await tryCannedAndEscalate(
-      `haha nije mi se uspio otvoriti video ovdje 🤍 ${owner} ti se javi čim bude između klijenata`,
-      'video_attachment',
-    );
-    return;
-  }
-  if (hasAudio) {
-    await tryCannedAndEscalate(
-      `nisam mogla otvoriti audio poruku 🤍 ${owner} ti se javi čim bude između klijenata`,
-      'audio_attachment',
-    );
-    return;
-  }
-  if (imagesMissingUrl.length > 0) {
-    await tryCannedAndEscalate(
-      `vidim da si poslala nešto, ali mi se ne učitava 🤍 ${owner} ti se javi čim bude između klijenata`,
-      'image_without_url',
-    );
+  if (escalationReason) {
+    await escalateToOwner({ db: deps.db, ghl, salon, conversation, reason: escalationReason });
     return;
   }
 

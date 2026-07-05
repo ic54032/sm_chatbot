@@ -146,10 +146,10 @@ describe('e2e #6 — image handling', () => {
     // No LLM call — the hard-escalation prečac in handle-inbound short-circuits the respond queue.
     expect(llm.calls).toHaveLength(0);
 
-    // Canned reassurance was sent (mock outbound log entry exists, message references the video).
+    // Silent escalation: no reply goes to the client — the owner picks the
+    // conversation up personally from the escalation notification.
     const log = await db.selectFrom('mock_outbound_log').selectAll().execute();
-    expect(log).toHaveLength(1);
-    expect(log[0].message).toContain('video');
+    expect(log).toHaveLength(0);
 
     // Escalation row exists with reason='video_attachment'
     const escalations = await db.selectFrom('escalations').selectAll().execute();

@@ -2,7 +2,7 @@
  * Unit tests for handleInbound — Task 12: attachment classification + escalation prečaci.
  *
  * Uses vi.mock to avoid a real DB. All repo calls are stubbed; we assert on
- * the side-effects: respondQueue.add calls, escalation reason, canned sendMessage.
+ * the side-effects: respondQueue.add calls, escalation reason, absence of client replies.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Queue } from 'bullmq';
@@ -172,7 +172,7 @@ describe('handleInbound — attachment classification + escalation prečaci', ()
     vi.mocked(messagesRepo.insertInbound).mockResolvedValue({ id: 'msg-1' });
   });
 
-  it('escalates with reason video_attachment when attachment.type=video, no respond job queued', async () => {
+  it('escalates with reason video_attachment when attachment.type=video, silently (no client reply), no respond job queued', async () => {
     const ghl = makeGhl({
       getMessage: vi.fn(async () => ({
         text: '',
@@ -190,14 +190,7 @@ describe('handleInbound — attachment classification + escalation prečaci', ()
       'video_attachment',
       null,
     );
-    expect(ghl.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contactId: 'contact-1',
-        type: 'IG',
-        message: expect.stringContaining('Sarah'),
-      }),
-    );
-    expect((ghl.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].message).toContain('video');
+    expect(ghl.sendMessage).not.toHaveBeenCalled();
     expect(respondQueue.add).not.toHaveBeenCalled();
   });
 
@@ -219,8 +212,7 @@ describe('handleInbound — attachment classification + escalation prečaci', ()
       'audio_attachment',
       null,
     );
-    expect(ghl.sendMessage).toHaveBeenCalled();
-    expect((ghl.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].message).toContain('audio');
+    expect(ghl.sendMessage).not.toHaveBeenCalled();
     expect(respondQueue.add).not.toHaveBeenCalled();
   });
 
@@ -242,7 +234,7 @@ describe('handleInbound — attachment classification + escalation prečaci', ()
       'image_without_url',
       null,
     );
-    expect(ghl.sendMessage).toHaveBeenCalled();
+    expect(ghl.sendMessage).not.toHaveBeenCalled();
     expect(respondQueue.add).not.toHaveBeenCalled();
   });
 
@@ -298,31 +290,4 @@ describe('handleInbound — attachment classification + escalation prečaci', ()
     expect(vi.mocked(messagesRepo.insertInbound)).not.toHaveBeenCalled();
   });
 
-  it('still escalates even if canned reassurance sendMessage throws (graceful degradation)', async () => {
-    const sendMessage = vi.fn(async () => {
-      throw new Error('outside 24h IG window');
-    });
-    const ghl = makeGhl({
-      sendMessage,
-      getMessage: vi.fn(async () => ({
-        text: '',
-        attachments: [{ url: 'https://x.test/v.mp4', type: 'video' as const }],
-      })),
-    });
-    const respondQueue = makeRespondQueue();
-    const deps = makeDeps(ghl, respondQueue);
-
-    await handleInbound(deps, baseInput());
-
-    // sendMessage was attempted
-    expect(sendMessage).toHaveBeenCalled();
-    // Escalation still proceeds
-    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
-      expect.anything(),
-      'conv-1',
-      'video_attachment',
-      null,
-    );
-    expect(respondQueue.add).not.toHaveBeenCalled();
-  });
 });

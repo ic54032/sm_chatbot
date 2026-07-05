@@ -3,7 +3,7 @@ import { buildPrompt } from '../../../src/prompt/build.js';
 import type { Salon, ConversationContext } from '../../../src/core/types.js';
 import type { ProcessedImage } from '../../../src/images/process.js';
 
-function makeSalon(): Salon {
+function makeSalon(configOverrides: Record<string, unknown> = {}): Salon {
   return {
     id: 's1',
     displayName: 'Test',
@@ -27,12 +27,13 @@ function makeSalon(): Salon {
       handoff_window_hours: 4,
       ghl_custom_field_ids: { needs_owner_attention: 'a', bot_paused_until: 'b', last_escalation_reason: 'c' },
       image_processing: { enabled: true, max_dimension: 1280, jpeg_quality: 80 },
+      ...configOverrides,
     } as Salon['config'],
     isActive: true,
   };
 }
 
-function makeMsg(id: string, direction: 'inbound' | 'outbound', text: string | null): ConversationContext['recentMessages'][number] {
+function makeMsg(id: string, direction: 'inbound' | 'outbound', text: string | null, createdAt: Date = new Date()): ConversationContext['recentMessages'][number] {
   return {
     id,
     conversationId: 'c1',
@@ -42,7 +43,7 @@ function makeMsg(id: string, direction: 'inbound' | 'outbound', text: string | n
     aiRawOutput: null,
     sanitizeMods: null,
     ghlMessageId: null,
-    createdAt: new Date(),
+    createdAt,
     rawContent: null,
   };
 }
@@ -147,5 +148,73 @@ describe('buildPrompt multimodal output', () => {
     const ctx = baseCtx([makeMsg('m1', 'inbound', 'hi')]);
     const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
     expect(result.systemPrompt).toContain('IDENTITY AND VOICE');
+  });
+});
+
+describe('buildPrompt time awareness', () => {
+  const hourMs = 3_600_000;
+
+  it('includes salon-local datetime line when config.timezone is set', () => {
+    const ctx = baseCtx([makeMsg('m1', 'inbound', 'hi')]);
+    const salon = makeSalon({ timezone: 'America/Chicago' });
+    const result = buildPrompt({ salon, ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
+    expect(result.systemPrompt).toMatch(/- Current date and time \(salon local\): \w+, \w+ \d{1,2}, \d{4}/);
+  });
+
+  // Note: the master prompt body itself mentions both line names in its Time
+  // awareness section, so negative assertions must target the state-line
+  // format ("- <name>: ") which only build.ts emits.
+  it('omits the datetime line when timezone is not set', () => {
+    const ctx = baseCtx([makeMsg('m1', 'inbound', 'hi')]);
+    const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
+    expect(result.systemPrompt).not.toContain('- Current date and time (salon local):');
+  });
+
+  it('omits the datetime line (without crashing) for an invalid timezone', () => {
+    const ctx = baseCtx([makeMsg('m1', 'inbound', 'hi')]);
+    const salon = makeSalon({ timezone: 'Not/AZone' });
+    const result = buildPrompt({ salon, ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
+    expect(result.systemPrompt).not.toContain('- Current date and time (salon local):');
+  });
+
+  it('omits hours-since line for a brand new conversation (all inbound)', () => {
+    const ctx = baseCtx([makeMsg('m1', 'inbound', 'hi')]);
+    const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
+    expect(result.systemPrompt).not.toContain('- Hours since last client message:');
+  });
+
+  it('reports the gap between the previous reply and the current client message', () => {
+    const t0 = new Date('2026-07-01T10:00:00Z');
+    const ctx = baseCtx([
+      makeMsg('m1', 'inbound', 'hi', t0),
+      makeMsg('m2', 'outbound', 'hello!', new Date(t0.getTime() + 1 * hourMs)),
+      makeMsg('m3', 'inbound', 'back again', new Date(t0.getTime() + 49 * hourMs)),
+    ]);
+    const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
+    expect(result.systemPrompt).toContain('- Hours since last client message: 48');
+  });
+
+  it('measures from the START of a batched inbound burst, not the last message in it', () => {
+    const t0 = new Date('2026-07-01T10:00:00Z');
+    const ctx = baseCtx([
+      makeMsg('m1', 'inbound', 'hi', t0),
+      makeMsg('m2', 'outbound', 'hello!', new Date(t0.getTime() + 1 * hourMs)),
+      // Client returns after 24h with a rapid two-message burst.
+      makeMsg('m3', 'inbound', 'hey', new Date(t0.getTime() + 25 * hourMs)),
+      makeMsg('m4', 'inbound', 'you there?', new Date(t0.getTime() + 25 * hourMs + 9_000)),
+    ]);
+    const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
+    expect(result.systemPrompt).toContain('- Hours since last client message: 24');
+  });
+
+  it('reports 0 hours for a continuing rapid exchange', () => {
+    const t0 = new Date('2026-07-01T10:00:00Z');
+    const ctx = baseCtx([
+      makeMsg('m1', 'inbound', 'hi', t0),
+      makeMsg('m2', 'outbound', 'hello!', new Date(t0.getTime() + 60_000)),
+      makeMsg('m3', 'inbound', 'ok cool', new Date(t0.getTime() + 120_000)),
+    ]);
+    const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
+    expect(result.systemPrompt).toContain('- Hours since last client message: 0');
   });
 });

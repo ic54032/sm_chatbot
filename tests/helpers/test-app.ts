@@ -14,7 +14,7 @@ import type { RespondJobData } from '../../src/queue/index.js';
 import type { LlmClient } from '../../src/llm/client.js';
 import type { fetchAttachment as defaultFetchAttachment } from '../../src/images/fetch.js';
 
-const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://localhost:56379';
+const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://localhost:57379';
 
 export interface TestApp {
   app: FastifyInstance;
