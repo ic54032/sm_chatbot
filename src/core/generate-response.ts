@@ -179,167 +179,195 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
     'llm call composition debug',
   );
 
-  let llmResult: Awaited<ReturnType<typeof deps.llm.complete>>;
-  let attempts = 0;
-  while (true) {
-    try {
-      llmResult = await deps.llm.complete({
-        systemPrompt: prompt.systemPrompt,
-        messages: prompt.messages,
-        tools: allTools,
-        model: salon.config.llm_model ?? deps.defaultLlmModel,
-        maxTokens: 512,
-      });
-      logger.info({
-        conversationId,
-        textLen: llmResult.text.length,
-        textPreview: llmResult.text.slice(0, 200),
-        toolCalls: llmResult.toolCalls.map((c) => c.name),
-        inputTokens: llmResult.usage.inputTokens,
-        outputTokens: llmResult.usage.outputTokens,
-      }, 'llm response received');
-      break;
-    } catch (err) {
-      attempts++;
-      logger.warn({ err, attempts, conversationId }, 'llm.complete failed; retrying');
-      if (attempts >= 3) {
-        await escalateToOwner({
-          db: deps.db,
-          ghl: deps.ghl,
-          salon,
-          conversation: ctx.conversation,
-          reason: 'llm_failed',
-        });
-        return;
-      }
-      const backoff = 500 * 2 ** attempts;
-      await new Promise((r) => setTimeout(r, backoff));
-    }
-  }
-
-  // GPT-4o sometimes writes tool calls as literal "[tool(...)]" text, mimicking
-  // the prompt's example notation, instead of firing native function calls
-  // (production incident 2026-07-06). Strip that syntax so the client never
-  // sees it, and keep the parsed calls so intent can be recovered below.
-  const { cleanedText, calls: leakedToolCalls } = extractLeakedToolCalls(llmResult.text);
-  if (leakedToolCalls.length > 0) {
-    logger.warn(
-      { conversationId, leakedToolNames: leakedToolCalls.map((c) => c.name), textPreview: llmResult.text.slice(0, 300) },
-      'LLM wrote tool-call syntax as reply text; stripped and recovering intent',
-    );
-  }
-
-  // Collect tool intentions. Defer escalate_to_owner execution until AFTER send
-  // so the LLM-generated reassurance text (e.g. "let me grab Sarah for you")
-  // reaches the client before the tag flips and the bot goes silent.
+  // The whole generation (LLM call -> strip leaked tool syntax -> recover
+  // intent -> sanitize) runs inside an outer loop so a blank, no-intent
+  // response can be retried once. GPT-4o intermittently returns text that
+  // sanitizes to nothing with no tool call on very short affirmations ("yes",
+  // "indeed") — a transient hiccup. Without the retry, that blank response
+  // escalates a booking-intent customer straight to the owner (production
+  // report 2026-07-10). Retry first; only escalate if the SECOND attempt is
+  // also empty.
+  let llmResult!: Awaited<ReturnType<typeof deps.llm.complete>>;
   let escalationArgs: { reason: string; contextSummary?: string } | undefined;
   let linkSentToolCalled = false;
-  for (const call of llmResult.toolCalls) {
-    if (call.name === 'escalate_to_owner') {
-      const reason = (call.arguments.reason as string | undefined) ?? 'unspecified';
-      const summary = call.arguments.context_summary as string | undefined;
-      escalationArgs = { reason, contextSummary: summary };
-    } else if (call.name === 'mark_link_sent') {
-      linkSentToolCalled = true;
-    } else if (call.name === 'set_state_flag') {
-      const key = call.arguments.key as string | undefined;
-      const value = call.arguments.value;
-      if (key && (ALLOWED_STATE_KEYS as readonly string[]).includes(key)) {
-        await conversationsRepo.mergeState(deps.db, conversationId, { [key]: value });
-      } else {
-        logger.warn({ conversationId, key }, 'rejected unknown state flag');
-      }
-    } else {
-      // A tool name outside the three registered ones (hallucinated or drifted
-      // prompt). Nothing to execute — log loudly so prompt drift is visible.
-      logger.warn({ conversationId, toolName: call.name }, 'LLM called unregistered tool; ignoring');
-    }
-  }
+  let leakedToolCalls: ReturnType<typeof extractLeakedToolCalls>['calls'] = [];
+  let sanitized!: Awaited<ReturnType<typeof sanitize>>;
+  const MAX_EMPTY_RETRIES = 1;
 
-  // Recover intent from text-form tool calls the model failed to fire natively.
-  // The client already read the corresponding promise ("I'm letting Renata
-  // handle this one"), so dropping the intent would strand the conversation.
-  // Leaked args are model-authored text, so unlike native args they are only
-  // trusted after validation: the reason must be one of the prompt's eight
-  // enum values (otherwise client-quoted words could end up in the owner's
-  // GHL last_escalation_reason field), and both named and positional arg
-  // shapes are accepted since leaks mimic either notation.
-  for (const leaked of leakedToolCalls) {
-    if (leaked.name === 'escalate_to_owner') {
-      if (!escalationArgs) {
-        const rawReason = typeof leaked.named.reason === 'string' ? leaked.named.reason : leaked.positional[0];
-        const reason =
-          typeof rawReason === 'string' && LEAKED_ESCALATION_REASONS.has(rawReason) ? rawReason : 'unspecified';
-        const rawSummary =
-          typeof leaked.named.context_summary === 'string'
-            ? leaked.named.context_summary
-            : typeof leaked.positional[0] === 'string' && LEAKED_ESCALATION_REASONS.has(leaked.positional[0])
-              ? leaked.positional[1]
+  outer: for (let emptyAttempt = 0; ; emptyAttempt++) {
+    // LLM call with exception-retry (up to 3 API failures -> llm_failed).
+    let apiAttempts = 0;
+    while (true) {
+      try {
+        llmResult = await deps.llm.complete({
+          systemPrompt: prompt.systemPrompt,
+          messages: prompt.messages,
+          tools: allTools,
+          model: salon.config.llm_model ?? deps.defaultLlmModel,
+          maxTokens: 512,
+        });
+        logger.info({
+          conversationId,
+          emptyAttempt,
+          textLen: llmResult.text.length,
+          textPreview: llmResult.text.slice(0, 200),
+          toolCalls: llmResult.toolCalls.map((c) => c.name),
+          inputTokens: llmResult.usage.inputTokens,
+          outputTokens: llmResult.usage.outputTokens,
+        }, 'llm response received');
+        break;
+      } catch (err) {
+        apiAttempts++;
+        logger.warn({ err, apiAttempts, conversationId }, 'llm.complete failed; retrying');
+        if (apiAttempts >= 3) {
+          await escalateToOwner({
+            db: deps.db,
+            ghl: deps.ghl,
+            salon,
+            conversation: ctx.conversation,
+            reason: 'llm_failed',
+          });
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 500 * 2 ** apiAttempts));
+      }
+    }
+
+    // GPT-4o sometimes writes tool calls as literal "[tool(...)]" text, mimicking
+    // the prompt's example notation, instead of firing native function calls
+    // (production incident 2026-07-06). Strip that syntax so the client never
+    // sees it, and keep the parsed calls so intent can be recovered below.
+    const extracted = extractLeakedToolCalls(llmResult.text);
+    const cleanedText = extracted.cleanedText;
+    leakedToolCalls = extracted.calls;
+    if (leakedToolCalls.length > 0) {
+      logger.warn(
+        { conversationId, leakedToolNames: leakedToolCalls.map((c) => c.name), textPreview: llmResult.text.slice(0, 300) },
+        'LLM wrote tool-call syntax as reply text; stripped and recovering intent',
+      );
+    }
+
+    // Fresh intent per attempt.
+    escalationArgs = undefined;
+    linkSentToolCalled = false;
+
+    // Collect tool intentions. Defer escalate_to_owner execution until AFTER send
+    // so the LLM-generated reassurance text (e.g. "let me grab Sarah for you")
+    // reaches the client before the tag flips and the bot goes silent.
+    for (const call of llmResult.toolCalls) {
+      if (call.name === 'escalate_to_owner') {
+        const reason = (call.arguments.reason as string | undefined) ?? 'unspecified';
+        const summary = call.arguments.context_summary as string | undefined;
+        escalationArgs = { reason, contextSummary: summary };
+      } else if (call.name === 'mark_link_sent') {
+        linkSentToolCalled = true;
+      } else if (call.name === 'set_state_flag') {
+        const key = call.arguments.key as string | undefined;
+        const value = call.arguments.value;
+        if (key && (ALLOWED_STATE_KEYS as readonly string[]).includes(key)) {
+          await conversationsRepo.mergeState(deps.db, conversationId, { [key]: value });
+        } else {
+          logger.warn({ conversationId, key }, 'rejected unknown state flag');
+        }
+      } else {
+        // A tool name outside the three registered ones (hallucinated or drifted
+        // prompt). Nothing to execute — log loudly so prompt drift is visible.
+        logger.warn({ conversationId, toolName: call.name }, 'LLM called unregistered tool; ignoring');
+      }
+    }
+
+    // Recover intent from text-form tool calls the model failed to fire natively.
+    // The client already read the corresponding promise ("I'm letting Renata
+    // handle this one"), so dropping the intent would strand the conversation.
+    // Leaked args are model-authored text, so unlike native args they are only
+    // trusted after validation: the reason must be one of the prompt's eight
+    // enum values (otherwise client-quoted words could end up in the owner's
+    // GHL last_escalation_reason field), and both named and positional arg
+    // shapes are accepted since leaks mimic either notation.
+    for (const leaked of leakedToolCalls) {
+      if (leaked.name === 'escalate_to_owner') {
+        if (!escalationArgs) {
+          const rawReason = typeof leaked.named.reason === 'string' ? leaked.named.reason : leaked.positional[0];
+          const reason =
+            typeof rawReason === 'string' && LEAKED_ESCALATION_REASONS.has(rawReason) ? rawReason : 'unspecified';
+          const rawSummary =
+            typeof leaked.named.context_summary === 'string'
+              ? leaked.named.context_summary
+              : typeof leaked.positional[0] === 'string' && LEAKED_ESCALATION_REASONS.has(leaked.positional[0])
+                ? leaked.positional[1]
+                : undefined;
+          escalationArgs = {
+            reason,
+            contextSummary: typeof rawSummary === 'string' ? rawSummary.slice(0, 300) : undefined,
+          };
+        }
+      } else if (leaked.name === 'mark_link_sent') {
+        linkSentToolCalled = true;
+      } else if (leaked.name === 'set_state_flag') {
+        const key =
+          typeof leaked.named.key === 'string'
+            ? leaked.named.key
+            : typeof leaked.positional[0] === 'string'
+              ? leaked.positional[0]
               : undefined;
-        escalationArgs = {
-          reason,
-          contextSummary: typeof rawSummary === 'string' ? rawSummary.slice(0, 300) : undefined,
-        };
+        const value = leaked.named.value ?? (typeof leaked.positional[0] === 'string' ? leaked.positional[1] : leaked.positional[0]);
+        if (key && value !== undefined && (ALLOWED_STATE_KEYS as readonly string[]).includes(key)) {
+          await conversationsRepo.mergeState(deps.db, conversationId, { [key]: value });
+        } else {
+          logger.warn({ conversationId, key }, 'rejected unknown state flag from leaked text call');
+        }
       }
-    } else if (leaked.name === 'mark_link_sent') {
-      linkSentToolCalled = true;
-    } else if (leaked.name === 'set_state_flag') {
-      const key =
-        typeof leaked.named.key === 'string'
-          ? leaked.named.key
-          : typeof leaked.positional[0] === 'string'
-            ? leaked.positional[0]
-            : undefined;
-      const value = leaked.named.value ?? (typeof leaked.positional[0] === 'string' ? leaked.positional[1] : leaked.positional[0]);
-      if (key && value !== undefined && (ALLOWED_STATE_KEYS as readonly string[]).includes(key)) {
-        await conversationsRepo.mergeState(deps.db, conversationId, { [key]: value });
-      } else {
-        logger.warn({ conversationId, key }, 'rejected unknown state flag from leaked text call');
-      }
+      // Unknown names (e.g. the invented "get_started_link") need no recovery —
+      // stripping the text was the whole fix; already logged above.
     }
-    // Unknown names (e.g. the invented "get_started_link") need no recovery —
-    // stripping the text was the whole fix; already logged above.
-  }
 
-  // Safety net for LLM tool-call reliability: if the model wrote handoff-promise
-  // language ("let me grab Renata", "I'll let her know") but didn't fire
-  // escalate_to_owner, force the escalation anyway. The customer was already
-  // promised the owner is coming — failing to follow through breaks trust and
-  // leaves the conversation silently un-handed-off.
-  if (!escalationArgs && containsHandoffPromise(cleanedText)) {
-    logger.warn(
-      { conversationId, textPreview: cleanedText.slice(0, 200) },
-      'bot promised handoff in reply but did not call escalate_to_owner; forcing escalation',
-    );
-    escalationArgs = {
-      reason: 'implied_handoff_no_tool_call',
-      contextSummary: cleanedText.slice(0, 200),
-    };
-  }
+    // Safety net for LLM tool-call reliability: if the model wrote handoff-promise
+    // language ("let me grab Renata", "I'll let her know") but didn't fire
+    // escalate_to_owner, force the escalation anyway. The customer was already
+    // promised the owner is coming — failing to follow through breaks trust and
+    // leaves the conversation silently un-handed-off.
+    if (!escalationArgs && containsHandoffPromise(cleanedText)) {
+      logger.warn(
+        { conversationId, textPreview: cleanedText.slice(0, 200) },
+        'bot promised handoff in reply but did not call escalate_to_owner; forcing escalation',
+      );
+      escalationArgs = {
+        reason: 'implied_handoff_no_tool_call',
+        contextSummary: cleanedText.slice(0, 200),
+      };
+    }
 
-  let sanitized: Awaited<ReturnType<typeof sanitize>>;
-  try {
-    sanitized = await sanitize(cleanedText, {
-      bookingLink: salon.sourceOfTruth.booking.url,
-      bookingLinkSentInLastNHours: (hours) => eventsRepo.recentBookingLinkSent(deps.db, conversationId, hours),
-      policy: {
-        maxWordsPerMessage: salon.config.max_words_per_message,
-        maxEmojis: salon.config.max_emojis,
-        bookingLinkDedupWindowHours: salon.config.booking_link_dedup_window_hours,
-      },
-    });
-  } catch (err) {
-    if (err instanceof SanitizerEmptyOutputError) {
-      // Empty output is only an unexpected failure when LLM had no escalation intent.
-      // If LLM already flagged escalate, substitute a canned reassurance line so the
-      // client doesn't see silence. Gemini (and other tool-tuned models) often emit
-      // only the tool call without accompanying text, so we can't rely on the prompt
-      // alone to produce the handoff message.
-      if (escalationArgs) {
-        const owner = salon.sourceOfTruth.salon_basics.owner_first_name;
-        const fallback = `let me grab ${owner} for you, she'll jump in as soon as she's between clients 🤍`;
-        sanitized = { messages: [fallback], modifications: ['escalation_fallback_text'] };
-      } else {
+    try {
+      sanitized = await sanitize(cleanedText, {
+        bookingLink: salon.sourceOfTruth.booking.url,
+        bookingLinkSentInLastNHours: (hours) => eventsRepo.recentBookingLinkSent(deps.db, conversationId, hours),
+        policy: {
+          maxWordsPerMessage: salon.config.max_words_per_message,
+          maxEmojis: salon.config.max_emojis,
+          bookingLinkDedupWindowHours: salon.config.booking_link_dedup_window_hours,
+        },
+      });
+      break outer; // usable output produced
+    } catch (err) {
+      if (err instanceof SanitizerEmptyOutputError) {
+        // Empty output with a real escalation intent is fine: the model emitted
+        // only the tool call. Substitute a canned reassurance line so the client
+        // doesn't see silence. (Gemini and other tool-tuned models do this.)
+        if (escalationArgs) {
+          const owner = salon.sourceOfTruth.salon_basics.owner_first_name;
+          const fallback = `let me grab ${owner} for you, she'll jump in as soon as she's between clients 🤍`;
+          sanitized = { messages: [fallback], modifications: ['escalation_fallback_text'] };
+          break outer;
+        }
+        // Empty output, no escalation intent: a transient hiccup. Retry the
+        // whole generation once before escalating the (usually booking-intent)
+        // customer to the owner.
+        if (emptyAttempt < MAX_EMPTY_RETRIES) {
+          logger.warn({ conversationId, emptyAttempt }, 'llm produced empty output with no escalation intent; retrying once');
+          await new Promise((r) => setTimeout(r, 500));
+          continue outer;
+        }
+        logger.warn({ conversationId }, 'llm produced empty output again after retry; escalating');
         await escalateToOwner({
           db: deps.db,
           ghl: deps.ghl,
@@ -349,7 +377,6 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
         });
         return;
       }
-    } else {
       throw err;
     }
   }
