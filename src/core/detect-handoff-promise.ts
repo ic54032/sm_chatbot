@@ -28,6 +28,26 @@ const HANDOFF_PROMISE_PATTERNS: RegExp[] = [
   /\b[A-Z][a-z]+ will (?:jump in|reach out|get back to you|be (?:with|right) (?:you|with you))\b/,
   // "she/he/[Name] will/can address/handle this directly"
   /\b(?:[Ss]he|[Hh]e|[A-Z][a-z]+) (?:can|will) (?:address|handle) (?:this|that) (?:directly|herself|himself)\b/,
+  // The "handle/take" family below carries a clause-end guard: the object
+  // (this/that/it, optionally "one") must NOT be followed by another lowercase
+  // word. Real handoff promises end the clause ("handle this one." / "take
+  // this one 🤍" / "take it from here"), while ordinary salon vocabulary
+  // continues ("take it slow", "take it down a shade", "take this into
+  // account", "let Olaplex handle it between visits") — adversarial review
+  // found a dozen such benign phrasings, each of which would otherwise
+  // force-escalate and pause the bot for the whole handoff window.
+  //
+  // "I'm letting Renata handle this one" — the exact 2026-07-06 production
+  // miss: reassurance shipped, tool never fired.
+  /\b[Ll]et(?:ting)? (?:her|him|them|[A-Z][a-z]+) (?:handle|take) (?:(?:this|that|it)(?: one)?(?!\s+[a-z])|it from here\b)/,
+  // "Imma let Renata take this one" (literally the master prompt's hostile-
+  // language example reassurance) / "I'll let her handle it"
+  /\b(?:Imma|[Ii]'?m gonna|[Ii]'ll|[Ii] will) let (?:her|him|them|[A-Z][a-z]+) (?:take|handle) (?:(?:this|that|it)(?: one)?(?!\s+[a-z])|it from here\b)/,
+  // "she'll take it from here" / "Renata will take this one 🤍". The name
+  // variant excludes sentence-initial determiners/pronouns ("That will take it
+  // right out") that [A-Z][a-z]+ would otherwise read as an owner name.
+  /\b(?:[Ss]he|[Hh]e|[Tt]hey)'ll take (?:(?:this|that|it)(?: one)?(?!\s+[a-z])|it from here\b)/,
+  /\b(?!(?:This|That|It|The|She|He|We|You|They|And|But|So|Yes)\s)[A-Z][a-z]+ will take (?:(?:this|that|it)(?: one)?(?!\s+[a-z])|it from here\b)/,
 ];
 
 export function containsHandoffPromise(text: string): boolean {

@@ -26,6 +26,9 @@ describe('loadMasterPrompt', () => {
     expect(prompt).toContain('Booking link sent recently');
     expect(prompt).toContain('dangling colon');
     expect(prompt).not.toContain('sent in last N messages');
+    // Anti-leak rule after the 2026-07-06 incident: bracket example notation
+    // must never be written into reply text.
+    expect(prompt).toContain('INVISIBLE native function calls');
   });
 
   it('contains the heart emoji, not the mojibake artifact', () => {
