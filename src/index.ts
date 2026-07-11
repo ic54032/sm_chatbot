@@ -20,6 +20,19 @@ import type { Redis } from 'ioredis';
 
 async function main() {
   const cfg = loadConfig();
+  // First line every boot: which commit is actually running. Render injects
+  // RENDER_GIT_COMMIT automatically; match it against `git rev-parse HEAD` to
+  // confirm the deployed build without guessing from behavior. 'unknown' means
+  // the env var is absent (local run or a platform that doesn't set it).
+  logger.info(
+    {
+      gitCommit: process.env.RENDER_GIT_COMMIT ?? process.env.GIT_COMMIT ?? 'unknown',
+      nodeEnv: cfg.nodeEnv,
+      llmModel: cfg.llmModel,
+      bootAt: new Date().toISOString(),
+    },
+    'boot: service starting',
+  );
   const db = createKyselyDb(cfg.databaseUrl);
   const redis = createConnection(cfg.redisUrl);
   const llm: LlmClient = createLlmClient(cfg);
