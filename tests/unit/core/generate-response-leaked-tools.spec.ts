@@ -248,27 +248,18 @@ describe('generateResponse — leaked tool-call text recovery', () => {
     );
   });
 
-  it('reply that is ONLY a leaked NON-escalation call escalates sanitizer_empty_output, sends nothing, records no link event', async () => {
-    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('ok'));
+  it('reply that is ONLY a leaked [mark_link_sent()] sends the booking link (same recovery as native link intent), no escalation', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('i want to book'));
     const llm = new FakeLlmClient();
     llm.stage({ match: () => true, output: { text: '[mark_link_sent()]', toolCalls: [] } });
     const ghl = makeGhl();
     await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
 
-    expect(ghl.sendMessage).not.toHaveBeenCalled();
-    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
-      expect.anything(),
-      'conv-1',
-      'sanitizer_empty_output',
-      null,
-    );
-    // The aborted turn sent nothing, so the dedup window must NOT start
-    expect(vi.mocked(eventsRepo.insert)).not.toHaveBeenCalledWith(
-      expect.anything(),
-      'conv-1',
-      'booking_link_sent',
-      expect.anything(),
-    );
+    const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('https://lumenhairstudio.glossgenius.com/book');
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+    expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'booking_link_sent', {});
   });
 
   it('leaked set_state_flag with a disallowed key does NOT merge state', async () => {

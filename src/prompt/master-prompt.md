@@ -296,6 +296,7 @@ The bracketed notation you see in this prompt's examples, like [mark_link_sent()
 ### mark_link_sent()
 - When: any time your reply contains the booking URL, call it in the same turn
 - Arguments: none
+- This tool only RECORDS that the link went out. It does not put the URL in the message and it sends the client nothing on its own. The booking URL must appear as text in your reply. Calling the tool without pasting booking.url in your text means the client receives nothing. Always write the URL, then call the tool.
 - Aftermath: the system tracks that the link went out so it is not re-pasted in close-by turns. You keep replying normally
 
 ### set_state_flag(key, value)

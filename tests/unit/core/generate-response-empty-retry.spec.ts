@@ -103,13 +103,16 @@ describe('generateResponse — empty-output retry', () => {
   let generateResponse: (typeof import('../../../src/core/generate-response.js'))['generateResponse'];
   let conversationsRepo: typeof import('../../../src/db/repos/conversations.js');
   let escalationsRepo: typeof import('../../../src/db/repos/escalations.js');
+  let eventsRepo: typeof import('../../../src/db/repos/events.js');
 
   beforeEach(async () => {
     vi.clearAllMocks();
     ({ generateResponse } = await import('../../../src/core/generate-response.js'));
     conversationsRepo = await import('../../../src/db/repos/conversations.js');
     escalationsRepo = await import('../../../src/db/repos/escalations.js');
+    eventsRepo = await import('../../../src/db/repos/events.js');
     vi.mocked(escalationsRepo.upsertActive).mockResolvedValue(undefined);
+    vi.mocked(eventsRepo.recentBookingLinkSent).mockResolvedValue(false);
   });
 
   it('blank first response retries, and the SECOND (real) response is sent — no escalation', async () => {
@@ -160,6 +163,49 @@ describe('generateResponse — empty-output retry', () => {
 
     expect(llm.calls).toHaveLength(2);
     expect(vi.mocked(ghl.sendMessage).mock.calls[0][0].message).toContain('sounds good');
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+  });
+
+  it('empty text WITH mark_link_sent (link intent) sends the booking URL instead of escalating — the confirmed 2026-07-10 bug', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('i want to book an apointment'));
+    const llm = new FakeLlmClient();
+    // Exact production shape: empty text, mark_link_sent + set_state_flag fired.
+    llm.stage({
+      match: () => true,
+      output: {
+        text: '',
+        toolCalls: [
+          { name: 'mark_link_sent', arguments: {} },
+          { name: 'set_state_flag', arguments: { key: 'client_is_hesitant', value: false } },
+        ],
+      },
+    });
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect(llm.calls).toHaveLength(1); // no retry: link intent is clear
+    const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('https://lumenhairstudio.glossgenius.com/book');
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+    // dedup window starts
+    expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'booking_link_sent', {});
+  });
+
+  it('empty text + mark_link_sent when link was already sent recently sends a nudge (no re-pasted URL)', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx("i'd book"));
+    vi.mocked(eventsRepo.recentBookingLinkSent).mockResolvedValue(true);
+    const llm = new FakeLlmClient();
+    llm.stage({ match: () => true, output: { text: '', toolCalls: [{ name: 'mark_link_sent', arguments: {} }] } });
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).not.toContain('https://lumenhairstudio.glossgenius.com/book');
+    expect(sent[0].toLowerCase()).toContain('link');
     expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
   });
 

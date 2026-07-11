@@ -94,6 +94,27 @@ Točno ono što Biblija traži u Sekcijama 10 i 12, plus oporavak namjere:
 Bez backporta ovih izmjena, sljedeća regeneracija iz Layer 1 tiho ih briše — točno
 lipanjski drift scenarij koji tvoja Sekcija 13 zabranjuje.
 
+## 4b. Naknadni nalaz (10.-11.7.): mark_link_sent bez teksta
+
+Produkcijski log potvrdio je odvojen, ali srodan kvar. Na booking porukama
+("i want to book an apointment") GPT-4o vraća `textLen:0` uz
+`toolCalls:["mark_link_sent","set_state_flag"]` — dakle **pozove alat da pošalje
+link ali ne napiše nijedno slovo** (ne zalijepi URL). Rezultat: klijent ne dobije
+ništa, a backend je (prije fixa) eskalirao svaki takav turn -> bot zamrznut u
+petlji eskalacija. To NIJE bio problem veze s LLM-om (75/78 odgovora ima pravi
+tekst, `llm_failed` nema nijedan) ni drugi bot na stranici (potvrđeno: ona
+"Hello, sure we can do that" poruka bila je vlasnik koji je ručno tipkao).
+
+Backend fix (pouzdan, u našoj kontroli): kad je izlaz prazan a `mark_link_sent`
+je pozvan -> backend sam zalijepi booking.url (ili blagi nudge ako je link već
+poslan u dedup prozoru), umjesto eskalacije. Plus retry jednom na svaki prazan
+izlaz bez namjere prije eskalacije.
+
+Za backport u Layer 1 generator (Sekcija 12, mark_link_sent): dodano pravilo da
+alat SAMO bilježi slanje i NE stavlja URL u poruku — URL mora biti u tekstu
+odgovora, inače klijent ne dobije ništa. Ovo smanjuje učestalost kvara na izvoru;
+backend fix ostaje mreža ispod.
+
 ## 5. Bonus nalaz za GHL stranu
 
 Klijentov text bubble **"Do you do this type of hair?"** (poslan uz shareani IG post,

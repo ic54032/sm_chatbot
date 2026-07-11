@@ -359,6 +359,29 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
           sanitized = { messages: [fallback], modifications: ['escalation_fallback_text'] };
           break outer;
         }
+        // Empty output but the model signaled link intent (mark_link_sent)
+        // without pasting the URL — the confirmed 2026-07-10 failure: on
+        // booking messages ("i want to book") GPT-4o fires mark_link_sent and
+        // set_state_flag but writes no text, so the client got nothing and, in
+        // the old code, an escalation. Paste the link ourselves; the customer
+        // explicitly asked to book and we have booking.url.
+        if (linkSentToolCalled) {
+          const bookingUrl = salon.sourceOfTruth.booking.url;
+          const recentlySent = await eventsRepo.recentBookingLinkSent(
+            deps.db,
+            conversationId,
+            salon.config.booking_link_dedup_window_hours,
+          );
+          const linkMessage = recentlySent
+            ? `the booking link I sent has all the latest openings 🤍`
+            : `here you go 🤍 ${bookingUrl}`;
+          logger.warn(
+            { conversationId, recentlySent },
+            'llm signaled link intent with empty text; sending booking link fallback',
+          );
+          sanitized = { messages: [linkMessage], modifications: ['link_intent_no_text_fallback'] };
+          break outer;
+        }
         // Empty output, no escalation intent: a transient hiccup. Retry the
         // whole generation once before escalating the (usually booking-intent)
         // customer to the owner.
