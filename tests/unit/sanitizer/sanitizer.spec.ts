@@ -3,8 +3,7 @@ import { sanitize } from '../../../src/sanitizer/index.js';
 
 const baseCtx = {
   bookingLink: 'https://example.com/book',
-  bookingLinkSentInLastNHours: async () => false,
-  policy: { maxWordsPerMessage: 40, maxEmojis: 2, bookingLinkDedupWindowHours: 3 },
+  policy: { maxWordsPerMessage: 40, maxEmojis: 2 },
 };
 
 describe('sanitizer — forbidden chars', () => {
@@ -63,16 +62,11 @@ describe('sanitizer — links', () => {
     expect(result.messages[0]).not.toContain('https://b.com');
   });
 
-  it('removes booking link if recently sent', async () => {
-    const result = await sanitize('Book here https://example.com/book today', {
-      ...baseCtx,
-      bookingLinkSentInLastNHours: async () => true,
-    });
-    expect(result.messages[0]).not.toContain('https://example.com/book');
-    expect(result.modifications).toContain('booking_link_deduplicated');
-  });
-
-  it('keeps booking link when not recently sent', async () => {
+  it('keeps the booking link — the sanitizer no longer strips it across turns', async () => {
+    // Across-turn dedup was removed (production 2026-07-11): stripping the link
+    // broke legitimate re-pastes ("here it is again for you:" with no URL). The
+    // prompt decides when to re-paste vs refer conversationally; the sanitizer
+    // never removes the booking link now.
     const result = await sanitize('Book here https://example.com/book today', baseCtx);
     expect(result.messages[0]).toContain('https://example.com/book');
     expect(result.modifications).not.toContain('booking_link_deduplicated');
@@ -103,14 +97,10 @@ describe('sanitizer — word count split', () => {
 });
 
 describe('sanitizer — bug regressions', () => {
-  it('strips trailing period from captured URL (dedup recognizes link with sentence period)', async () => {
-    const result = await sanitize('Book at https://example.com/book.', {
-      ...baseCtx,
-      bookingLinkSentInLastNHours: async () => true,
-    });
-    // Booking link should be stripped because it was recognized despite trailing period
-    expect(result.messages[0]).not.toContain('https://example.com/book');
-    expect(result.modifications).toContain('booking_link_deduplicated');
+  it('strips trailing period from a captured URL so the clean URL survives', async () => {
+    const result = await sanitize('Book at https://example.com/book.', baseCtx);
+    // The URL is preserved (trailing sentence period trimmed off the capture).
+    expect(result.messages[0]).toContain('https://example.com/book');
   });
 
   it('does not substring-match similar URLs (booking="https://example.com/book" vs "https://example.com/booking-info")', async () => {

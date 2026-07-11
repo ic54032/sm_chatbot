@@ -24,7 +24,8 @@ describe('loadMasterPrompt', () => {
     // Local hardening ported across swaps: the sanitizer-strip colon warning
     // and the state label matching build.ts ("sent recently", not "in last N messages").
     expect(prompt).toContain('Booking link sent recently');
-    expect(prompt).toContain('dangling colon');
+    // Re-paste the link when the client can't find it (2026-07-11 fix).
+    expect(prompt).toContain('cannot find it');
     expect(prompt).not.toContain('sent in last N messages');
     // Anti-leak rule after the 2026-07-06 incident: bracket example notation
     // must never be written into reply text.

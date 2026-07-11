@@ -115,6 +115,26 @@ alat SAMO bilježi slanje i NE stavlja URL u poruku — URL mora biti u tekstu
 odgovora, inače klijent ne dobije ništa. Ovo smanjuje učestalost kvara na izvoru;
 backend fix ostaje mreža ispod.
 
+## 4c. Naknadni nalaz (11.7.): dedup je brisao re-paste linka
+
+Produkcija: klijent kaže "i do not see it", model ISPRAVNO re-pasta booking.url,
+ali sanitizerov across-turn dedup (`booking_link_deduplicated`) ga strip-a jer je
+link poslan < 24h ranije -> klijent dobije razbijenu poruku "here it is again for
+you: Happy booking!" bez URL-a. Potvrđeno raw-vs-sent usporedbom (raw je imao URL,
+poslano ne, mods = booking_link_deduplicated).
+
+Backend fix: **uklonjen across-turn booking-link dedup iz sanitizera.** Kad model
+uključi link, prolazi. Odluka "re-paste vs referiraj razgovorno" pripada promptu
+(state blok modelu i dalje kaže da je link nedavno poslan), ne sanitizeru. Bonus:
+ovo ujedno gasi stari dangling-colon bug (URL sad ostaje umjesto da se strip-a).
+
+Za backport u Layer 1 generator (Sekcije 2 i 7): pravilo "booking link sent
+recently" preformulirano — za uzgredni spomen referiraj razgovorno, ALI **re-pastaj
+puni URL kad klijent ne može naći link, traži ga ponovo, ili aktivno pokušava
+bukirati** ("i do not see it", "send it again", "which one", "can i book").
+Uklonjena zastarjela rečenica "the sanitizer strips any repeated paste" (sanitizer
+to više ne radi).
+
 ## 5. Bonus nalaz za GHL stranu
 
 Klijentov text bubble **"Do you do this type of hair?"** (poslan uz shareani IG post,

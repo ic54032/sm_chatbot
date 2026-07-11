@@ -340,11 +340,9 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
     try {
       sanitized = await sanitize(cleanedText, {
         bookingLink: salon.sourceOfTruth.booking.url,
-        bookingLinkSentInLastNHours: (hours) => eventsRepo.recentBookingLinkSent(deps.db, conversationId, hours),
         policy: {
           maxWordsPerMessage: salon.config.max_words_per_message,
           maxEmojis: salon.config.max_emojis,
-          bookingLinkDedupWindowHours: salon.config.booking_link_dedup_window_hours,
         },
       });
       break outer; // usable output produced

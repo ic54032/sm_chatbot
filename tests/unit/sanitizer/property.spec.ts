@@ -4,8 +4,7 @@ import { sanitize } from '../../../src/sanitizer/index.js';
 
 const baseCtx = {
   bookingLink: 'https://example.com/book',
-  bookingLinkSentInLastNHours: async () => false,
-  policy: { maxWordsPerMessage: 40, maxEmojis: 2, bookingLinkDedupWindowHours: 3 },
+  policy: { maxWordsPerMessage: 40, maxEmojis: 2 },
 };
 
 const arbText = fc.string({ minLength: 1, maxLength: 800 });

@@ -3,11 +3,9 @@ import { splitOnSentenceBoundaries } from './split.js';
 
 export interface SanitizeContext {
   bookingLink: string;
-  bookingLinkSentInLastNHours: (hours: number) => Promise<boolean>;
   policy: {
     maxWordsPerMessage: number;
     maxEmojis: number;
-    bookingLinkDedupWindowHours: number;
   };
 }
 
@@ -59,15 +57,18 @@ export async function sanitize(raw: string, ctx: SanitizeContext): Promise<Sanit
     mods.push('extra_links_stripped');
   }
 
-  // 6. Booking link dedup (exact match check via array, not substring).
-  if (links.includes(ctx.bookingLink)) {
-    if (await ctx.bookingLinkSentInLastNHours(ctx.policy.bookingLinkDedupWindowHours)) {
-      text = text.replace(ctx.bookingLink, '').replace(/\s+/g, ' ').trim();
-      mods.push('booking_link_deduplicated');
-    }
-  }
+  // NOTE: there is deliberately no across-turn booking-link dedup here. It used
+  // to strip the URL whenever the link had been sent within the dedup window,
+  // but that stripped the link even when the model legitimately re-pasted it
+  // (client says "i do not see it", explicit re-request), producing broken
+  // replies like "here it is again for you: Happy booking!" with no URL
+  // (production 2026-07-11). Whether to re-paste vs refer conversationally is a
+  // conversational judgment that belongs in the prompt (the "# Conversation
+  // state" block tells the model the link was sent recently); the sanitizer no
+  // longer overrides that decision. Removing it also retires the old
+  // dangling-colon bug, since the URL now stays put instead of being scrubbed.
 
-  // 7. Emoji cap (codepoint-level; ZWJ orphan known issue, see fixture 03).
+  // 6. Emoji cap (codepoint-level; ZWJ orphan known issue, see fixture 03).
   const emojiRe = /\p{Extended_Pictographic}/gu;
   const emojiMatches = [...text.matchAll(emojiRe)];
   if (emojiMatches.length > ctx.policy.maxEmojis) {

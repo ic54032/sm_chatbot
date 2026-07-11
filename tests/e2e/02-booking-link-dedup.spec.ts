@@ -9,7 +9,7 @@ import * as salonsRepo from '../../src/db/repos/salons.js';
 
 const fixturesDir = join(fileURLToPath(new URL('.', import.meta.url)), 'fixtures');
 
-describe('e2e #2 — booking link dedup across turns', () => {
+describe('e2e #2 — booking link is not stripped across turns', () => {
   const db = createTestDb();
   let testApp: Awaited<ReturnType<typeof buildTestApp>>;
   let llm: FakeLlmClient;
@@ -33,7 +33,7 @@ describe('e2e #2 — booking link dedup across turns', () => {
     await db.destroy();
   });
 
-  it('first turn keeps link, second turn strips it', async () => {
+  it('keeps the link on both turns — no across-turn dedup (client may re-request it)', async () => {
     const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-lumen.json'), 'utf8'));
     const salon = await salonsRepo.create(db, {
       displayName: fixture.display_name,
@@ -62,7 +62,8 @@ describe('e2e #2 — booking link dedup across turns', () => {
     expect(outboundsTurn1).toHaveLength(1);
     expect(outboundsTurn1[0].text_content).toContain(bookingUrl);
 
-    // Same response staged for turn 2; sanitizer should strip the link.
+    // Same response staged for turn 2. The client is effectively re-requesting
+    // the link, so it must survive — the sanitizer no longer strips it.
     await testApp.app.inject({
       method: 'POST',
       url: '/dev/simulate-inbound',
@@ -77,8 +78,8 @@ describe('e2e #2 — booking link dedup across turns', () => {
       .selectAll()
       .execute();
     expect(outboundsAll).toHaveLength(2);
-    expect(outboundsAll[1].text_content).not.toContain(bookingUrl);
+    expect(outboundsAll[1].text_content).toContain(bookingUrl);
     const sanitizeMods = outboundsAll[1].sanitize_mods as string[];
-    expect(sanitizeMods).toContain('booking_link_deduplicated');
+    expect(sanitizeMods).not.toContain('booking_link_deduplicated');
   });
 });
