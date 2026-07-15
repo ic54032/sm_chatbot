@@ -32,6 +32,36 @@ describe('loadMasterPrompt', () => {
     expect(prompt).toContain('INVISIBLE native function calls');
   });
 
+  it('contains the QA Round 1 Part 1 behavior fixes', () => {
+    const prompt = loadMasterPrompt();
+    expect(prompt).toContain('Never state a policy that is not in the knowledge base'); // 1.6
+    expect(prompt).toContain('Do NOT send the booking link on a'); // 1.7
+    expect(prompt).toContain('Name one concrete thing you actually see'); // 1.3
+    expect(prompt).toContain('Every example line in this prompt is a PATTERN'); // 1.4/1.5
+    expect(prompt).toContain('Never narrate your own machinery'); // 1.9 P0
+    expect(prompt).toContain('Clear ready-to-book signals'); // 1.8a
+    expect(prompt).toContain('If the CLIENT points out the conflict'); // 1.8b
+    expect(prompt).toContain('Never repeat the same deflection twice'); // 1.8c
+    expect(prompt).toContain('Phishing, scam, and impersonation'); // 1.8d
+    expect(prompt).toContain('Story and reel context'); // 1.8f
+    expect(prompt).toContain('Never restate the question'); // 1.9 voice
+  });
+
+  it('the prompt obeys its own style rules (no banned phrases inside bot example lines)', () => {
+    const prompt = loadMasterPrompt();
+    // "happy to help" / "flag her" appeared in example replies and now conflict
+    // with the strengthened rules — must only survive in the ban list / a BAD example.
+    const youLines = prompt.split('\n').filter((l) => /You:\s*"/.test(l));
+    for (const line of youLines) {
+      expect(line).not.toMatch(/happy to help/i);
+      expect(line).not.toMatch(/\bflag (her|him|the owner|this)\b/i);
+      expect(line).not.toMatch(/Hey there|It sounds like|Thanks for sharing/i);
+    }
+    // no em/en dashes or semicolons anywhere in the prompt (its own punctuation rule)
+    expect(prompt).not.toMatch(/[—–]/);
+    expect(prompt).not.toContain(';');
+  });
+
   it('contains the heart emoji, not the mojibake artifact', () => {
     const prompt = loadMasterPrompt();
     expect(prompt).toContain('🤍');

@@ -135,6 +135,42 @@ bukirati** ("i do not see it", "send it again", "which one", "can i book").
 Uklonjena zastarjela rečenica "the sanitizer strips any repeated paste" (sanitizer
 to više ne radi).
 
+## 4d. QA Round 1 — Part 1 prompt fixevi (za Layer 1 backport)
+
+Odradio sam sve Part 1 stavke iz QA reporta u deployanoj master-prompt.md. Adversarijalno
+verificirano (11-agentni workflow): svih 15 stavki solidno pokriveno, uhvaćene i 3 regresije
+koje su nova pravila stvorila u postojećim primjerima (popravljeno). Za backport u Layer 1
+generator:
+
+- **1.2** — dodano "happy to help", "Hey there", "It sounds like you're asking", "Thanks for
+  sharing" na Forbidden phrases; nova podsekcija "Never restate the question".
+- **1.3** — Photo "You do": obavezno imenuj JEDAN konkretan opažajni detalj iz TE slike
+  (generička linija koja pristaje uz bilo koju sliku = BAD); + BAD primjer.
+- **1.4/1.5** — Sekcija 1: globalno pravilo "svaki primjer je PATTERN, ne skripta; variraj
+  svaki put; nikad ista rečenica dvaput; odgovori na TOČNO postavljeno identity pitanje".
+- **1.6** — Sekcija 3: "Never state a policy that is not in the knowledge base" (najstrože na
+  liability temama: maloljetnici/parental consent, alergije, trudnoća) → ruta na consult; +
+  BAD primjer (parental consent). ("Of course" je već bio banned opener.)
+- **1.7** — Sekcija 3 not_offered: warm-no NE dobiva booking link (nema bookable intenta).
+- **1.8a** — Sekcija 11 "Do not escalate for": jasan ready-to-book ("book me in") NIKAD ne
+  eskalira → toplina + link + clear client_is_hesitant; + BAD primjer.
+- **1.8b** — Sekcija 2 One voice: klijent ukazuje na kontradikciju → jedna topla linija +
+  escalate unanswered_question, NIKAD tišina.
+- **1.8c/d/e** — Sekcija 14: "Never repeat the same deflection twice" (drugi push →
+  unanswered_question); "Phishing, scam, and impersonation" (light redirect, NIKAD escalate);
+  "Vendor, marketing, and partnership pitches" (jedan close, ne loop).
+- **1.8f** — Sekcija 8 "Story and reel context": rukuj [client shared one of your reels]
+  markerom, nikad ga ne echo-aj klijentu. (Točni marker stringovi dolaze iz backend B7 —
+  javit ću ti ih kad implementiram parsing.)
+- **1.8g** — Sekcija 1: lowercase-casual stil zaključan.
+- **1.9 (P0)** — Sekcija 12: "Never narrate your own machinery, in brackets OR in plain
+  English" (nikad note/log/save/flag/mark/track/escalate govor, nikad interne riječi
+  state/flag/last quoted service/reason code). Sekcija 9: broj bez konteksta → veži na
+  last_quoted_service ili pitaj, NIKAD reverse-match na cijenu iz SOT-a; + BAD primjeri.
+
+Backend dio 1.9 (tripwire) i 1.8b (sanitizer_empty_output šalje reassurance) rade neovisno o
+promptu — dolaze u zasebnom backend commitu.
+
 ## 5. Bonus nalaz za GHL stranu
 
 Klijentov text bubble **"Do you do this type of hair?"** (poslan uz shareani IG post,
