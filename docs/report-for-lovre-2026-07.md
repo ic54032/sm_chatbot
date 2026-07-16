@@ -230,6 +230,39 @@ quoted service", "flagging this for the owner", "putting this in the system", + 
   owner` — both named verbatim in Section 12) — all fixed; a corpus of 52 tests (29 leak + 23
   legit phrases) guards against regressions in both directions.
 
+## 4g. Follow-up finding (Jul 16): the bot re-pasted the booking link every turn
+
+Production (Lumen test conversation): the bot pasted the full booking URL on nearly every turn —
+price, hesitance, consult, photo — 12+ times in one conversation, which reads as robotic spam.
+
+Diagnosis (DB-confirmed, NOT a backend bug): the "Booking link sent recently" state was computed
+correctly and was TRUE on every one of those turns (`recentBookingLinkSent` over the 24h window),
+and the model **ignored it**. Root cause is a prompt-design tension: ~15 rules mandate the link
+("Send the link on turn 1, always", price policy "b" = range then consult *with the link*,
+hesitance/photo/availability/damage all include booking.url, and every example pastes it), while
+the single counter-rule was weak and self-undermining — "you *usually* do not need to paste... for
+an *incidental* mention... **When in doubt, paste it.**" The model resolved the conflict toward
+pasting every time. There is no backend net because the sanitizer's across-turn link dedup was
+removed in 4c (it broke legitimate re-pastes and caused a dangling-colon bug).
+
+Fix (prompt only, for Layer 1 backport): made the "sent recently" rule dominant. When true, do NOT
+paste the URL again — refer to it conversationally on any turn where you would otherwise include it
+(price, consult, hesitance, photo, damage, availability). Removed "When in doubt, paste it". The
+exception is an explicit request to see/resend the link ("i do not see it", "send it again") or a
+functional action the client was not already pointed to (cancel/reschedule); a ready-to-book signal
+("book me in") is NOT a link request — point them back to the one already sent (consistent with
+Section 11). Turn-1 behavior (sent recently = false → paste fresh) is unchanged.
+
+An adversarial two-lens review of this change flagged that the prose was strengthened but the
+example bank still taught only pasting (zero examples of the new conversational-reference behavior)
+— the likely reason the model ignored the TRUE state in production. So the fix touches more than
+Sections 2 and 7: added three worked examples (repeat-turn conversational reference, ready-to-book
+point-back, explicit re-paste), a caveat on the photo rule (Section 8), a cross-reference on the
+price policies (Section 9), and closed a 12h-vs-24h dead zone (a 12h+ gap now also resets "link not
+recently sent" so a returning client gets a fresh paste). Backport ALL of these. Note: GPT-4o
+adherence is not 100%; a backend dedup net remains possible but is deferred (the dangling-colon risk
+is why it was removed in 4c).
+
 ## 5. Bonus finding for the GHL side
 
 The client's text bubble **"Do you do this type of hair?"** (sent alongside a shared IG post,
