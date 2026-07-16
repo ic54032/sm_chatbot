@@ -322,4 +322,46 @@ describe('generateResponse — empty-output retry', () => {
       null,
     );
   });
+
+  // ── B4: empty text on a ready-to-book message ────────────────────────────────
+
+  it('B4: empty text on "book me in" (model fired a non-link tool, no text) sends the LINK, not an escalation', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('You know what, im ready, book me in'));
+    const llm = new FakeLlmClient();
+    // Exact production shape: empty text, a NON-link tool fired (hesitant cleared), no mark_link_sent.
+    llm.stage({
+      match: () => true,
+      output: { text: '', toolCalls: [{ name: 'set_state_flag', arguments: { key: 'client_is_hesitant', value: false } }] },
+    });
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect(llm.calls).toHaveLength(1); // booking intent caught before the retry
+    const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('https://lumenhairstudio.glossgenius.com/book');
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+  });
+
+  it('empty text on a NON-booking message still escalates — no stray booking link', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('what time do you close on saturday?'));
+    const llm = new FakeLlmClient();
+    llm.stage({ match: () => true, output: { text: '', toolCalls: [] } });
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect(llm.calls).toHaveLength(2); // no booking intent -> retry, then escalate
+    const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).not.toContain('glossgenius.com/book'); // the concern: NO stray link
+    expect(sent[0]).toContain('let me grab Renata');
+    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      'sanitizer_empty_output',
+      null,
+    );
+  });
 });

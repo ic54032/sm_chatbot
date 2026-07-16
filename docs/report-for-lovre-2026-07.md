@@ -263,6 +263,34 @@ recently sent" so a returning client gets a fresh paste). Backport ALL of these.
 adherence is not 100%; a backend dedup net remains possible but is deferred (the dangling-colon risk
 is why it was removed in 4c).
 
+## 4h. B4 closed — "book me in" escalated instead of sending the link
+
+Production DB proof (Jul 16): client "You know what, im ready, book me in" -> the model returned
+EMPTY reply text but completion=39 tokens, i.e. it fired a tool (almost certainly
+set_state_flag(client_is_hesitant,false), which the prompt tells it to do on a ready-to-book
+signal) and wrote no text and did NOT fire mark_link_sent. The empty-output path then retried, got
+empty again, and escalated with reason sanitizer_empty_output + a "let me grab Renata" reassurance.
+So a converting client got a 4h handoff instead of the booking link — B4, the worst outcome at the
+moment of conversion. The prompt defense (1.8a "ready-to-book never escalates") does not help here
+because the model never explicitly escalated; it fell through the empty-output net.
+
+Fix (backend): a new branch in the empty-output handler — if the client's last message is a clear
+ready-to-book signal, send the booking link (reusing the existing mark_link_sent fallback: paste
+booking.url, or the point-back nudge if sent recently) instead of retrying/escalating. The signal is
+`containsBookingIntent` (new src/core/detect-booking-intent.ts): ANCHORED phrases only ("book me in",
+"i want to book", "ready to book", "sign me up", ...), never bare "ready"/"let's do it", with a
+leading-negation and trailing-deferral veto ("don't book me in", "book me in another time"). It reads
+ONLY the client's message, never a tool call, so it can never send a link merely because some
+unrelated tool fired on a non-booking turn.
+
+Design + implementation were adversarially reviewed (a false-positive-surface workflow + a wiring
+review). Two findings shaped the final design: (1) a tool-based signal (fire on set_state_flag
+clearing the hesitant flag) was DROPPED because it trusts the model's flag inference on the very turn
+it malfunctioned, and adds the exact stray-link risk without adding real coverage; (2) the negation
+veto was anchored to the token immediately before the phrase so an enthusiastic "I can't wait, book me
+in!" is not wrongly missed. Non-booking empty output still retries-then-escalates (preserving the B5
+hard-message handoff). This is backend-only; no prompt or Layer 1 change needed for B4.
+
 ## 5. Bonus finding for the GHL side
 
 The client's text bubble **"Do you do this type of hair?"** (sent alongside a shared IG post,

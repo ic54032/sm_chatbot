@@ -8,6 +8,7 @@ import * as eventsRepo from '../db/repos/events.js';
 import * as salonsRepo from '../db/repos/salons.js';
 import { sanitize } from '../sanitizer/index.js';
 import { matchInternalVocab } from '../sanitizer/internal-vocab.js';
+import { containsBookingIntent } from './detect-booking-intent.js';
 import { buildPrompt } from '../prompt/build.js';
 import { allTools } from '../prompt/tools.js';
 import { escalateToOwner } from './escalate.js';
@@ -423,6 +424,26 @@ export async function generateResponse(
             'llm signaled link intent with empty text; sending booking link fallback',
           );
           sanitized = { messages: [linkMessage], modifications: ['link_intent_no_text_fallback'] };
+          break outer;
+        }
+        // B4: empty text on a clear ready-to-book message. Same failure as above
+        // but the model fired a NON-link tool (e.g. set_state_flag clearing the
+        // hesitant flag on "book me in") and no mark_link_sent, so linkSentToolCalled
+        // is false. Escalating a converting client to silence is the worst outcome.
+        // containsBookingIntent reads ONLY the client's message (anchored booking
+        // phrases), never a tool call, so it can never fire because some unrelated
+        // tool ran on a non-booking turn. Genuine escalations were already handled
+        // by the escalationArgs branch above.
+        if (containsBookingIntent(lastInbound?.textContent)) {
+          const bookingUrl = salon.sourceOfTruth.booking.url;
+          const linkMessage = bookingLinkRecentlySent
+            ? `the booking link I sent has all the latest openings 🤍`
+            : `here you go 🤍 ${bookingUrl}`;
+          logger.warn(
+            { conversationId, recentlySent: bookingLinkRecentlySent },
+            'empty text on a ready-to-book message; sending booking link fallback (B4)',
+          );
+          sanitized = { messages: [linkMessage], modifications: ['booking_intent_no_text_fallback'] };
           break outer;
         }
         // Empty output, no escalation intent: a transient hiccup. Retry the
