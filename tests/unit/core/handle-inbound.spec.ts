@@ -290,4 +290,81 @@ describe('handleInbound — attachment classification + escalation prečaci', ()
     expect(vi.mocked(messagesRepo.insertInbound)).not.toHaveBeenCalled();
   });
 
+  // B7: a shared reel / story reply / view-once photo arrives as a bare webhook —
+  // empty text, empty attachments, but attachments_raw present (the client sent
+  // SOMETHING GHL dropped at ingestion). We can't render or decode it, so escalate
+  // to the owner rather than sit silent on a high-intent DM.
+  it('escalates with reason unviewable_media when webhook is empty but attachments_raw was present (shared reel / view-once)', async () => {
+    const ghl = makeGhl();
+    const respondQueue = makeRespondQueue();
+    const deps = makeDeps(ghl, respondQueue);
+
+    await handleInbound(
+      deps,
+      baseInput({ messageId: null, messageText: null, rawPayload: { attachments_raw: [] } }),
+    );
+
+    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      'unviewable_media',
+      null,
+    );
+    // Persisted as an inbound media row so the owner/analytics has a record.
+    expect(vi.mocked(messagesRepo.insertInbound)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ channelType: 'image', textContent: null }),
+    );
+    // Silent to the client + no respond job — a human picks it up.
+    expect(ghl.sendMessage).not.toHaveBeenCalled();
+    expect(respondQueue.add).not.toHaveBeenCalled();
+    // Causal link that makes the escalation self-limiting: it sets a handoff
+    // ~handoff_window_hours (4h) in the future, so the NEXT bare event on this
+    // conversation short-circuits at the handoff guard instead of re-escalating.
+    expect(vi.mocked(conversationsRepo.setHandoffUntil)).toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      expect.any(Date),
+    );
+    const handoffDate = vi.mocked(conversationsRepo.setHandoffUntil).mock.calls[0][2] as Date;
+    const hoursOut = (handoffDate.getTime() - Date.now()) / 3_600_000;
+    expect(hoursOut).toBeGreaterThan(3.9);
+    expect(hoursOut).toBeLessThan(4.1);
+  });
+
+  it('does NOT re-escalate unviewable media when a handoff is already active (self-limiting)', async () => {
+    vi.mocked(conversationsRepo.findOrCreate).mockResolvedValue({
+      ...fakeConversation,
+      handoffUntil: new Date(Date.now() + 3_600_000),
+    });
+    const ghl = makeGhl();
+    const respondQueue = makeRespondQueue();
+    const deps = makeDeps(ghl, respondQueue);
+
+    await handleInbound(
+      deps,
+      baseInput({ messageId: null, messageText: null, rawPayload: { attachments_raw: [] } }),
+    );
+
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+    expect(respondQueue.add).not.toHaveBeenCalled();
+    // The media row is still persisted before the handoff guard runs.
+    expect(vi.mocked(messagesRepo.insertInbound)).toHaveBeenCalled();
+  });
+
+  it('still drops (no escalation) when attachments_raw is an empty/"null" string, not a real value', async () => {
+    const ghl = makeGhl();
+    const respondQueue = makeRespondQueue();
+    const deps = makeDeps(ghl, respondQueue);
+
+    await handleInbound(
+      deps,
+      baseInput({ messageId: null, messageText: null, rawPayload: { attachments_raw: 'null' } }),
+    );
+
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+    expect(respondQueue.add).not.toHaveBeenCalled();
+    expect(vi.mocked(messagesRepo.insertInbound)).not.toHaveBeenCalled();
+  });
+
 });

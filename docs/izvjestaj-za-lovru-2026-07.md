@@ -187,12 +187,24 @@ B6 concurrency bug koji je popravljen answered-guardom):
   tehnički problem ni sam marker). Backend ubacuje taj marker kad fetch/decode padne.
 - **B6** — text+photo coalescing race (foto stranded jer je job bio aktivan): worker vraća
   watermark učitanih poruka i re-enqueuea drain job ako je nova poruka stigla tijekom obrade.
-  Ključni safety: **answered-guard** (ako je zadnja učitana poruka outbound, ništa se ne
-  odgovara) — čini svaki redundantni/racing job bezopasnim (nema double-reply ni krive
-  eskalacije).
-- **B7 Step 0** — webhook `.passthrough()` da GHL story/reel polja prežive u log; sljedeći
-  korak je poslati pravi story/reel payload pa napraviti `detect-share-context` + suppress
-  video-eskalacije za reel (marker `[client shared one of your reels]` je već u promptu 1.8f).
+  Ključni safety: **event-based answered-guard** — nakon svakog uspješnog odgovora upisujemo
+  `'replied'` event s timestampom najnovijeg inbounda kojeg je taj odgovor adresirao; drain
+  preskače samo ako je najnoviji učitani inbound ≤ zadnjeg adresiranog. (Prva verzija je
+  koristila "zadnja poruka je outbound" — review je dokazao da to pogrešno preskoči baš onu
+  stranded poruku koju drain treba isporučiti, jer je odgovor uvijek timestampiran POSLIJE
+  usput-pristigle poruke. Ispravljeno.)
+- **B7 — riješeno: shareani reel → eskalacija na vlasnika (`unviewable_media`).**
+  Discovery (uz `.passthrough()`): za shareani reel GHL renderira **sva tri merge taga prazno**
+  (`{{message.body}}`, `{{message.attachments}}`, `{{message.subject}}`) — sadržaj se gubi kod
+  GHL/Meta ingestije, pa reel **ne možemo dekodirati ni prikazati**. Empirijski potvrđeno da
+  IG lajkovi/reakcije **ne** okidaju webhook, pa prazan webhook pouzdano znači pravi content
+  share (reel / story reply / view-once), ne šum. Zato: prazan tekst + prazni attachmenti +
+  prisutan `attachments_raw` → klasificira se kao `unviewableMedia` → **eskalacija na vlasnika**
+  (konzistentno s `video_attachment` / `audio_attachment`). Prolazi kroz postojeći handoff
+  guard (self-limiting: prva takva poruka eskalira, daljnje u 4h prozoru padnu na guard).
+  Napomena za prompt: marker `[client shared one of your reels]` (1.8f) **ostaje neaktivan** —
+  ne možemo potvrditi da je baš reel (izgleda isto kao story/view-once), pa idemo na sigurnu
+  generičku eskalaciju umjesto ubacivanja markera.
 
 ## 5. Bonus nalaz za GHL stranu
 

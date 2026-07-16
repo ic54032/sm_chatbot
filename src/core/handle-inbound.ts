@@ -86,34 +86,43 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
   const images = attachments.filter((a) => a.type === 'image' && a.url);
   const imagesMissingUrl = attachments.filter((a) => a.type === 'image' && !a.url);
 
-  if (!textContent && attachments.length === 0) {
-    // Observability for the "view-once / unsupported media" hypothesis: if
-    // attachments_raw was present in the webhook but parsed to nothing, that's
-    // a different signal than a truly empty event. We log it distinctly so we
-    // can decide on a behavior change once we have empirical data from real
-    // view-once payloads. Behavior here is unchanged — both branches drop.
-    const attachmentsRawValue = rawPayloadObj.attachments_raw;
-    const attachmentsRawPresent =
-      attachmentsRawValue !== null &&
-      attachmentsRawValue !== undefined &&
-      (typeof attachmentsRawValue !== 'string' ||
-        (attachmentsRawValue.trim() !== '' && attachmentsRawValue.trim() !== 'null'));
+  // "Unviewable media": no text and nothing parseable as an attachment, BUT the
+  // webhook carried an attachments_raw value — the client sent SOMETHING we can't
+  // render (a shared reel, a story reply, a view-once photo, an unsupported type).
+  // GHL drops the real content at ingestion: all three merge tags
+  // ({{message.body}}, {{message.attachments}}, {{message.subject}}) render empty
+  // for these, so there is nothing to answer intelligently. A shared reel is often
+  // the highest-intent DM a salon gets ("can you do this look?"), so instead of
+  // sitting silent we escalate to the owner and a human picks it up.
+  const attachmentsRawValue = rawPayloadObj.attachments_raw;
+  const attachmentsRawPresent =
+    attachmentsRawValue !== null &&
+    attachmentsRawValue !== undefined &&
+    (typeof attachmentsRawValue !== 'string' ||
+      (attachmentsRawValue.trim() !== '' && attachmentsRawValue.trim() !== 'null'));
+  const unviewableMedia = !textContent && attachments.length === 0 && attachmentsRawPresent;
+
+  if (!textContent && attachments.length === 0 && !unviewableMedia) {
+    // Truly empty event: no text, no attachments, no attachments_raw. A system
+    // ping (receipt / typing / lifecycle), not a client message. Drop silently.
     logger.warn(
-      {
-        locationId: input.locationId,
-        contactId: input.contactId,
-        attachmentsRawPresent,
-        attachmentsRawValue,
-      },
-      attachmentsRawPresent
-        ? 'inbound has no text and no parseable attachments but attachments_raw was present; dropping (possible view-once / unsupported media)'
-        : 'inbound has no text and no attachments; dropping',
+      { locationId: input.locationId, contactId: input.contactId },
+      'inbound has no text and no attachments; dropping',
     );
     return;
   }
 
+  if (unviewableMedia) {
+    logger.warn(
+      { locationId: input.locationId, contactId: input.contactId, attachmentsRawValue },
+      'inbound is unviewable media (shared reel / story reply / view-once / unsupported); routing to owner escalation',
+    );
+  }
+
   const channelType: 'text' | 'image' =
-    images.length > 0 || hasVideo || hasAudio || imagesMissingUrl.length > 0 ? 'image' : 'text';
+    images.length > 0 || hasVideo || hasAudio || imagesMissingUrl.length > 0 || unviewableMedia
+      ? 'image'
+      : 'text';
 
   const conversation = await conversationsRepo.findOrCreate(deps.db, salon.id, input.contactId, input.contactHandle);
 
@@ -156,7 +165,9 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
       ? 'audio_attachment'
       : imagesMissingUrl.length > 0
         ? 'image_without_url'
-        : null;
+        : unviewableMedia
+          ? 'unviewable_media'
+          : null;
 
   if (escalationReason) {
     await escalateToOwner({ db: deps.db, ghl, salon, conversation, reason: escalationReason });
