@@ -107,6 +107,30 @@ describe('buildPrompt multimodal output', () => {
     });
   });
 
+  it('injects the [photo not received] marker for an unviewable image, keeping the caption (B3)', () => {
+    const ctx = baseCtx([makeMsg('m1', 'inbound', 'can you fix this?')]);
+    const result = buildPrompt({
+      salon: makeSalon(),
+      ctx,
+      bookingLinkRecentlySent: false,
+      imagesByMessageId: new Map(), // fetch failed, no processed image
+      unviewableImageMessageIds: new Set(['m1']),
+    });
+    expect(result.messages[0]).toEqual({ role: 'user', content: 'can you fix this? [photo not received]' });
+  });
+
+  it('marks a captionless unviewable image with just the marker', () => {
+    const ctx = baseCtx([makeMsg('m1', 'inbound', null)]);
+    const result = buildPrompt({
+      salon: makeSalon(),
+      ctx,
+      bookingLinkRecentlySent: false,
+      imagesByMessageId: new Map(),
+      unviewableImageMessageIds: new Set(['m1']),
+    });
+    expect(result.messages[0]).toEqual({ role: 'user', content: '[photo not received]' });
+  });
+
   it('includes multiple image blocks before text', () => {
     const ctx = baseCtx([makeMsg('m1', 'inbound', 'three views')]);
     const imgs = new Map();

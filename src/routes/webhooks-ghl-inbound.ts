@@ -17,7 +17,13 @@ const InboundPayloadSchema = z.object({
   attachments_raw: z.unknown().optional(),
   conversation_id: z.string().optional().nullable(),
   timestamp: z.string().optional().nullable(),
-});
+})
+  // passthrough() keeps unknown top-level keys instead of stripping them, so any
+  // story-reply / reel-share / post-share context field GHL sends survives into
+  // rawPayload and shows up in handle-inbound's "inbound classification debug"
+  // dump. This is the B7 discovery step: send a real story reply and a shared
+  // reel, then read those fields from the log to build detect-share-context.
+  .passthrough();
 
 export type InboundPayload = z.infer<typeof InboundPayloadSchema>;
 

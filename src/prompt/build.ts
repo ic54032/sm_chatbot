@@ -8,6 +8,9 @@ export interface BuildPromptInput {
   ctx: ConversationContext;
   bookingLinkRecentlySent: boolean;
   imagesByMessageId: Map<string, ProcessedImage[]>;
+  /** Inbound messages whose image could not be fetched/processed — marked so the
+   * model asks for a resend instead of the backend silently escalating. */
+  unviewableImageMessageIds?: Set<string>;
 }
 
 export interface BuildPromptOutput {
@@ -33,7 +36,7 @@ export function hoursSinceLastClientMessage(messages: ConversationContext['recen
 }
 
 export function buildPrompt(input: BuildPromptInput): BuildPromptOutput {
-  const { salon, ctx, bookingLinkRecentlySent, imagesByMessageId } = input;
+  const { salon, ctx, bookingLinkRecentlySent, imagesByMessageId, unviewableImageMessageIds } = input;
   const sot = salon.sourceOfTruth;
   const bookingUrl = sot.booking.url;
   const state = ctx.conversation.state;
@@ -90,6 +93,12 @@ ${JSON.stringify(sot, null, 2)}`;
         for (const img of imgs) blocks.push({ type: 'image', mediaType: img.mediaType, base64: img.base64 });
         blocks.push({ type: 'text', text: m.textContent ?? '[image only, no caption]' });
         messages.push({ role: 'user', content: blocks });
+      } else if (unviewableImageMessageIds?.has(m.id)) {
+        // Image was sent but could not be opened. The "[photo not received]"
+        // marker routes the model to its attachment-not-visible behavior (ask
+        // for a resend warmly, no technical excuse). Any caption is kept.
+        const caption = m.textContent ? `${m.textContent} ` : '';
+        messages.push({ role: 'user', content: `${caption}[photo not received]` });
       } else {
         messages.push({ role: 'user', content: m.textContent ?? '' });
       }

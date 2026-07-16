@@ -20,6 +20,7 @@ vi.mock('../../../src/db/repos/messages.js', () => ({
 }));
 vi.mock('../../../src/db/repos/events.js', () => ({
   recentBookingLinkSent: vi.fn().mockResolvedValue(false),
+  latestRepliedInboundAt: vi.fn().mockResolvedValue(null),
   insert: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../../../src/db/repos/escalations.js', () => ({
@@ -131,7 +132,7 @@ describe('generateResponse — empty-output retry', () => {
     expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
   });
 
-  it('blank on BOTH attempts escalates sanitizer_empty_output and sends nothing', async () => {
+  it('blank on BOTH attempts sends a reassurance line THEN escalates (never dead air) — B5', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('indeed'));
     const llm = new FakeLlmClient();
     llm.stage({ match: () => true, output: { text: '', toolCalls: [] } });
@@ -140,12 +141,57 @@ describe('generateResponse — empty-output retry', () => {
     await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
 
     expect(llm.calls).toHaveLength(2); // original + one retry
-    expect(ghl.sendMessage).not.toHaveBeenCalled();
+    // The client must NOT get pure silence: a reassurance line goes out first.
+    const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('let me grab Renata');
+    // and the escalation still fires afterward.
     expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
       expect.anything(),
       'conv-1',
       'sanitizer_empty_output',
       null,
+    );
+  });
+
+  it('answered-guard: newest inbound already answered -> no LLM, no send, no escalation (B6 double-reply prevention)', async () => {
+    const answeredAt = new Date('2026-07-16T10:00:00Z');
+    const ctx = makeCtx('hi');
+    // The single inbound's created_at equals what a prior reply already answered.
+    ctx.recentMessages[0].createdAt = answeredAt;
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(ctx);
+    vi.mocked(eventsRepo.latestRepliedInboundAt).mockResolvedValue(answeredAt);
+    const llm = new FakeLlmClient();
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect(llm.calls).toHaveLength(0); // already answered -> guard returns
+    expect(ghl.sendMessage).not.toHaveBeenCalled();
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+  });
+
+  it('answered-guard: a newer inbound than last answered DOES get processed (drain delivers the stranded message)', async () => {
+    const answeredAt = new Date('2026-07-16T10:00:00Z');
+    const newerInbound = new Date('2026-07-16T10:00:05Z'); // arrived after the prior reply
+    const ctx = makeCtx('how much?');
+    ctx.recentMessages[0].createdAt = newerInbound;
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(ctx);
+    vi.mocked(eventsRepo.latestRepliedInboundAt).mockResolvedValue(answeredAt);
+    const llm = new FakeLlmClient();
+    llm.stage({ match: () => true, output: { text: 'balayage starts around $220 🤍', toolCalls: [] } });
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect(llm.calls).toHaveLength(1); // newer than answered -> proceeds
+    expect(ghl.sendMessage).toHaveBeenCalledTimes(1);
+    // and it records what it answered
+    expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      'replied',
+      { answeredInboundAt: newerInbound.toISOString() },
     );
   });
 

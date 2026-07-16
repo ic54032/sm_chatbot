@@ -36,16 +36,24 @@ export async function processImageForVision(
     throw new UnsupportedImageFormatError(format ?? 'unknown');
   }
 
-  const out = await sharp(input, { animated: false })
-    .rotate()
-    .resize({
-      width: maxDimension,
-      height: maxDimension,
-      fit: 'inside',
-      withoutEnlargement: true,
-    })
-    .jpeg({ quality: jpegQuality, mozjpeg: true })
-    .toBuffer({ resolveWithObject: true });
+  let out: { data: Buffer; info: sharp.OutputInfo };
+  try {
+    out = await sharp(input, { animated: false })
+      .rotate()
+      .resize({
+        width: maxDimension,
+        height: maxDimension,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .jpeg({ quality: jpegQuality, mozjpeg: true })
+      .toBuffer({ resolveWithObject: true });
+  } catch {
+    // metadata() said the format was allowed, but the decode/resize still failed
+    // (truncated or corrupt payload). Surface it as a typed, clearly-skippable
+    // failure rather than a bare sharp Error.
+    throw new UnsupportedImageFormatError(format);
+  }
 
   return {
     base64: out.data.toString('base64'),

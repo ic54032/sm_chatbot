@@ -46,6 +46,7 @@ export async function buildTestApp(
     defaultLlmModel,
     connection,
     fetchAttachment: options?.fetchAttachment,
+    respondQueue: queue,
   });
 
   const cfg = {

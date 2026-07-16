@@ -78,3 +78,17 @@ export async function countInboundForSalon(db: Db, salonId: string, from: Date, 
     .executeTakeFirst();
   return Number(row?.n ?? 0);
 }
+
+/** created_at of the most recent inbound message, or null. Used by the respond
+ * worker to detect a message that arrived mid-processing (B6 drain). */
+export async function latestInboundAt(db: Db, conversationId: string): Promise<Date | null> {
+  const row = await db
+    .selectFrom('messages')
+    .where('conversation_id', '=', conversationId)
+    .where('direction', '=', 'inbound')
+    .select('created_at')
+    .orderBy('created_at', 'desc')
+    .limit(1)
+    .executeTakeFirst();
+  return row?.created_at ?? null;
+}

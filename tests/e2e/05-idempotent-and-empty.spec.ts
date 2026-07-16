@@ -64,7 +64,7 @@ describe('e2e #5 — idempotent inbound and sanitizer empty escalates', () => {
     expect(inbounds).toHaveLength(1);
   });
 
-  it('LLM output that sanitizes to empty triggers escalation', async () => {
+  it('LLM output that sanitizes to empty sends a reassurance line then escalates (B5, no dead air)', async () => {
     const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-lumen.json'), 'utf8'));
     const salon = await salonsRepo.create(db, {
       displayName: fixture.display_name,
@@ -74,7 +74,7 @@ describe('e2e #5 — idempotent inbound and sanitizer empty escalates', () => {
       config: fixture.config,
     });
 
-    // LLM returns only ellipses, which sanitizer strips → empty → escalate
+    // LLM returns only ellipses, which sanitizer strips → empty on both attempts.
     llm.stage({ match: () => true, output: { text: '………' } });
 
     await testApp.app.inject({
@@ -84,8 +84,10 @@ describe('e2e #5 — idempotent inbound and sanitizer empty escalates', () => {
     });
     await new Promise((r) => setTimeout(r, 1500));
 
+    // B5: the client gets a reassurance line, NOT dead air.
     const outbound = await db.selectFrom('messages').where('direction', '=', 'outbound').selectAll().execute();
-    expect(outbound).toHaveLength(0);
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0].text_content).toContain('jump in');
 
     const conv = await db
       .selectFrom('conversations')

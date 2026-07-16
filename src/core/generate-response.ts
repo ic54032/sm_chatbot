@@ -49,12 +49,48 @@ export interface GenerateResponseDeps {
   fetchAttachment?: typeof defaultFetchAttachment;
 }
 
-export async function generateResponse(deps: GenerateResponseDeps, salon: Salon, conversationId: string): Promise<void> {
+export interface GenerateResponseResult {
+  /** The newest inbound message this run actually loaded into context. The
+   * worker compares it against the live latest inbound afterward: if a newer
+   * message arrived DURING processing (the text+photo coalescing race, B6), it
+   * re-enqueues so that message is not stranded unanswered. null means "do not
+   * re-drive" (skipped/escalated paths). */
+  latestInboundAt: Date | null;
+}
+
+export async function generateResponse(
+  deps: GenerateResponseDeps,
+  salon: Salon,
+  conversationId: string,
+): Promise<GenerateResponseResult> {
   const ctx = await conversationsRepo.loadContext(deps.db, conversationId, 15);
+  const latestInboundAt = ctx.recentMessages.reduce<Date | null>(
+    (max, m) => (m.direction === 'inbound' && (!max || m.createdAt > max) ? m.createdAt : max),
+    null,
+  );
 
   if (ctx.conversation.handoffUntil && ctx.conversation.handoffUntil > new Date()) {
     logger.info({ conversationId }, 'handoff active at worker; skipping');
-    return;
+    return { latestInboundAt: null };
+  }
+
+  // Answered-guard: skip if every inbound we loaded has already been answered by
+  // an earlier reply. Compare the newest loaded inbound against the newest
+  // inbound a prior reply actually addressed (recorded as a 'replied' event,
+  // written after every successful send). This is the CORRECT predicate: the
+  // "last message" alone is unreliable, because a reply is always timestamped
+  // AFTER a message it did not answer, so a mid-processing inbound (the B6
+  // coalescing-race message) sits sandwiched just before an outbound. Comparing
+  // against what was actually answered lets a redundant run (a drain racing a
+  // normal job) no-op WITHOUT wrongly skipping the stranded message the drain
+  // exists to deliver.
+  if (!latestInboundAt) {
+    return { latestInboundAt: null }; // no inbound in the window, nothing to answer
+  }
+  const lastAnsweredInboundAt = await eventsRepo.latestRepliedInboundAt(deps.db, conversationId);
+  if (lastAnsweredInboundAt && latestInboundAt.getTime() <= lastAnsweredInboundAt.getTime()) {
+    logger.info({ conversationId }, 'newest inbound already answered by a prior reply; skipping');
+    return { latestInboundAt: null };
   }
 
   const bookingLinkRecentlySent = await eventsRepo.recentBookingLinkSent(
@@ -70,6 +106,10 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
   // failures (escalate, bot can't reply meaningfully) from historical failures
   // (log+skip, the current message is still actionable).
   const imagesByMessageId = new Map<string, ProcessedImage[]>();
+  // Inbound messages whose image(s) were attached but could not be fetched or
+  // processed (oversize GIF, expired CDN URL, decode error). The model gets a
+  // marker for these so it asks for a resend instead of us silently escalating.
+  const unviewableImageMessageIds = new Set<string>();
   const lastInbound = [...ctx.recentMessages].reverse().find((m) => m.direction === 'inbound');
   const lastInboundAttachments = lastInbound ? extractImageAttachments(lastInbound.rawContent) : [];
 
@@ -82,7 +122,7 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
       conversation: ctx.conversation,
       reason: 'image_processing_disabled',
     });
-    return;
+    return { latestInboundAt: null };
   }
 
   if (salon.config.image_processing.enabled) {
@@ -132,26 +172,30 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
       if (succeeded.length > 0) imagesByMessageId.set(msg.id, succeeded);
     }
 
-    // Current-turn failure check: if the LAST inbound had image attachments but
-    // none survived fetch+process, escalate. The signal is too important to lose
-    // silently — owner needs to intervene.
-    if (lastInbound && lastInboundAttachments.length > 0) {
-      const processedForLast = imagesByMessageId.get(lastInbound.id);
-      if (!processedForLast || processedForLast.length === 0) {
-        logger.warn({ conversationId, messageId: lastInbound.id }, 'current-turn image fetch failed; escalating');
-        await escalateToOwner({
-          db: deps.db,
-          ghl: deps.ghl,
-          salon,
-          conversation: ctx.conversation,
-          reason: 'attachment_fetch_failed',
-        });
-        return;
+    // Current-turn failure: mark every message in the trailing inbound burst
+    // (the current turn, which a coalesced "photo then text" burst can split
+    // across messages) whose image(s) all failed to fetch/process. DO NOT
+    // silently escalate and pause the bot for the whole handoff window
+    // (production 2026: an oversize reaction GIF paged the owner and left the
+    // client in silence for hours, so they disengaged). Instead degrade to a
+    // live text reply — the [photo not received] marker makes the model warmly
+    // ask for a resend — and keep the conversation alive. Historical failures
+    // (before the last outbound) stay skipped, not marked.
+    for (let i = ctx.recentMessages.length - 1; i >= 0; i--) {
+      const m = ctx.recentMessages[i];
+      if (m.direction !== 'inbound') break; // reached the start of the trailing burst
+      const atts = extractImageAttachments(m.rawContent);
+      if (atts.length > 0 && !imagesByMessageId.get(m.id)?.length) {
+        logger.warn(
+          { conversationId, messageId: m.id },
+          'current-turn image fetch failed; degrading to text-only reply (no escalation, no handoff)',
+        );
+        unviewableImageMessageIds.add(m.id);
       }
     }
   }
 
-  const prompt = buildPrompt({ salon, ctx, bookingLinkRecentlySent, imagesByMessageId });
+  const prompt = buildPrompt({ salon, ctx, bookingLinkRecentlySent, imagesByMessageId, unviewableImageMessageIds });
 
   // DIAGNOSTIC: confirm whether image content blocks actually reach the LLM call.
   // Empirical question: bot's response sounded image-aware on first turn but
@@ -227,7 +271,7 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
             conversation: ctx.conversation,
             reason: 'llm_failed',
           });
-          return;
+          return { latestInboundAt: null };
         }
         await new Promise((r) => setTimeout(r, 500 * 2 ** apiAttempts));
       }
@@ -388,15 +432,19 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
           await new Promise((r) => setTimeout(r, 500));
           continue outer;
         }
-        logger.warn({ conversationId }, 'llm produced empty output again after retry; escalating');
-        await escalateToOwner({
-          db: deps.db,
-          ghl: deps.ghl,
-          salon,
-          conversation: ctx.conversation,
-          reason: 'sanitizer_empty_output',
-        });
-        return;
+        // Empty again after retry, no intent. We still escalate, but the client
+        // must NOT get pure silence (production 2026: a client pointing out a
+        // price contradiction got dead air here). Send a reassurance line first,
+        // then let the normal post-send path fire the escalation, mirroring the
+        // escalationArgs branch above.
+        logger.warn({ conversationId }, 'llm produced empty output again after retry; sending reassurance then escalating');
+        const owner = salon.sourceOfTruth.salon_basics.owner_first_name;
+        sanitized = {
+          messages: [`let me grab ${owner} for you, she'll jump in as soon as she's between clients 🤍`],
+          modifications: ['sanitizer_empty_output_fallback_text'],
+        };
+        escalationArgs = { reason: 'sanitizer_empty_output' };
+        break outer;
       }
       throw err;
     }
@@ -449,9 +497,15 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
           reason: 'cannot_reply_outside_window',
         });
       }
-      return;
+      return { latestInboundAt: null };
     }
   }
+
+  // Record which inbound this reply answered, so the answered-guard on a later
+  // run knows everything up to here is handled (B6 double-reply prevention).
+  await eventsRepo.insert(deps.db, conversationId, 'replied', {
+    answeredInboundAt: latestInboundAt.toISOString(),
+  });
 
   // Record booking_link_sent event AFTER successful send so the dedup window starts
   // from the next turn, not the current one. Either the LLM declared intent via
@@ -476,4 +530,9 @@ export async function generateResponse(deps: GenerateResponseDeps, salon: Salon,
       contextSummary: escalationArgs.contextSummary,
     });
   }
+
+  // Replied successfully. If we escalated, the bot is now paused so a re-drive
+  // would just be dropped — return null. Otherwise hand the watermark back so
+  // the worker re-enqueues if a newer message arrived mid-processing (B6).
+  return { latestInboundAt: escalationArgs ? null : latestInboundAt };
 }

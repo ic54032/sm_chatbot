@@ -6,7 +6,7 @@
  *
  * Scenarios:
  *  1. Current inbound has image + fetch succeeds → LLM gets ContentBlock[] with image block.
- *  2. Current inbound has image + fetch fails → escalate 'attachment_fetch_failed', no LLM call.
+ *  2. Current inbound has image + fetch fails → degrade to text-only reply ([photo not received] marker), no escalation, no handoff (B3).
  *  3. Historical inbound has image (fetch fails) but current is text-only → log+skip, no escalate, LLM called.
  *  4. salon.config.image_processing.enabled=false + current inbound has image → escalate 'image_processing_disabled', no fetch/LLM.
  *  5. No inbound has images → LLM gets plain string content for every message.
@@ -34,6 +34,7 @@ vi.mock('../../../src/db/repos/messages.js', () => ({
 
 vi.mock('../../../src/db/repos/events.js', () => ({
   recentBookingLinkSent: vi.fn().mockResolvedValue(false),
+  latestRepliedInboundAt: vi.fn().mockResolvedValue(null),
   insert: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -189,7 +190,7 @@ describe('generateResponse image orchestration', () => {
     expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
   });
 
-  it('escalates with attachment_fetch_failed when current-turn image fetch fails', async () => {
+  it('current-turn image fetch failure degrades to a text reply — no escalation, no handoff (B3)', async () => {
     const ctx: ConversationContext = {
       conversation: fakeConversation,
       recentMessages: [
@@ -203,7 +204,7 @@ describe('generateResponse image orchestration', () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(ctx);
 
     const llm = new FakeLlmClient();
-    llm.stage({ match: () => true, output: { text: 'should not be called', toolCalls: [] } });
+    llm.stage({ match: () => true, output: { text: 'ooh send that over again for me 🤍', toolCalls: [] } });
 
     const fetcher = vi.fn(async (url: string) => {
       throw new AttachmentFetchError(404, url);
@@ -213,13 +214,17 @@ describe('generateResponse image orchestration', () => {
     await generateResponse(deps, fakeSalon, 'conv-1');
 
     expect(fetcher).toHaveBeenCalledWith('https://x.test/a.jpg', 'pit-1');
-    expect(llm.calls).toHaveLength(0);
-    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
-      expect.anything(),
-      'conv-1',
-      'attachment_fetch_failed',
-      null,
-    );
+    // The LLM IS called now (text-only), no escalation, conversation stays alive.
+    expect(llm.calls).toHaveLength(1);
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+    // The failed image's message carries the [photo not received] marker so the
+    // model asks for a resend; it reaches the LLM as plain text (no image block).
+    const firstMsg = llm.calls[0].messages[0];
+    expect(typeof firstMsg.content).toBe('string');
+    expect(firstMsg.content).toContain('[photo not received]');
+    // and a reply is sent to the client.
+    const sent = vi.mocked(deps.ghl.sendMessage).mock.calls.map((c) => c[0].message);
+    expect(sent.length).toBeGreaterThanOrEqual(1);
   });
 
   it('logs and skips historical image failure without escalating', async () => {

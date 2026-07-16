@@ -48,6 +48,7 @@ async function main() {
     defaultLlmModel: cfg.llmModel,
     connection,
     encryptionKey: cfg.pitEncryptionKey,
+    respondQueue,
   });
 
   const autoResume = await setupAutoResume({ db, ghlFor, connection, encryptionKey: cfg.pitEncryptionKey });

@@ -171,6 +171,29 @@ generator:
 Backend dio 1.9 (tripwire) i 1.8b (sanitizer_empty_output šalje reassurance) rade neovisno o
 promptu — dolaze u zasebnom backend commitu.
 
+## 4e. QA backend blok B3-B7 (10 fixeva; jedna prompt izmjena za backport)
+
+Odrađeni backend blokeri B3-B7 (adversarijalno reviewano — review je uhvatio i ozbiljan
+B6 concurrency bug koji je popravljen answered-guardom):
+
+- **B5** — empty-output bez namjere više ne ide u tišinu: šalje reassurance liniju pa
+  eskalira (`sanitizer_empty_output`).
+- **B3** — neuspjeh slike u trenutnom turnu više NE eskalira + pauzira bota 4h; degradira na
+  tekstualni odgovor. Backend: cijeli trailing inbound burst se označi, `process.ts`
+  tipizirane greške, `respond.ts` try/catch da throw nikad ne zamrzne razgovor.
+  **PROMPT (za Layer 1 backport, Sekcija 8):** dodano pravilo za marker `[photo not received]`
+  — kad je prisutan, klijent je poslao fotku koja se nije mogla otvoriti; rukuj kao
+  attachment-not-visible slučaj (toplo zamoli resend, odgovori na caption, nikad ne spominji
+  tehnički problem ni sam marker). Backend ubacuje taj marker kad fetch/decode padne.
+- **B6** — text+photo coalescing race (foto stranded jer je job bio aktivan): worker vraća
+  watermark učitanih poruka i re-enqueuea drain job ako je nova poruka stigla tijekom obrade.
+  Ključni safety: **answered-guard** (ako je zadnja učitana poruka outbound, ništa se ne
+  odgovara) — čini svaki redundantni/racing job bezopasnim (nema double-reply ni krive
+  eskalacije).
+- **B7 Step 0** — webhook `.passthrough()` da GHL story/reel polja prežive u log; sljedeći
+  korak je poslati pravi story/reel payload pa napraviti `detect-share-context` + suppress
+  video-eskalacije za reel (marker `[client shared one of your reels]` je već u promptu 1.8f).
+
 ## 5. Bonus nalaz za GHL stranu
 
 Klijentov text bubble **"Do you do this type of hair?"** (poslan uz shareani IG post,
