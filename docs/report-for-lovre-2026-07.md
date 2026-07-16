@@ -274,22 +274,30 @@ So a converting client got a 4h handoff instead of the booking link — B4, the 
 moment of conversion. The prompt defense (1.8a "ready-to-book never escalates") does not help here
 because the model never explicitly escalated; it fell through the empty-output net.
 
-Fix (backend): a new branch in the empty-output handler — if the client's last message is a clear
-ready-to-book signal, send the booking link (reusing the existing mark_link_sent fallback: paste
-booking.url, or the point-back nudge if sent recently) instead of retrying/escalating. The signal is
-`containsBookingIntent` (new src/core/detect-booking-intent.ts): ANCHORED phrases only ("book me in",
-"i want to book", "ready to book", "sign me up", ...), never bare "ready"/"let's do it", with a
-leading-negation and trailing-deferral veto ("don't book me in", "book me in another time"). It reads
-ONLY the client's message, never a tool call, so it can never send a link merely because some
-unrelated tool fired on a non-booking turn.
+Fix (backend), general — a CORRECTIVE retry. The root cause is a tool-happy model that fires a tool
+and forgets to verbalize, so the fix makes the model write the reply rather than guessing intent.
+The empty-output path already retried once; that retry is now corrective: on empty output it appends
+a short nudge ("your last turn produced no reply text, write your reply now") AND drops native tools
+for that one attempt (forceTextRetry) so the model physically cannot fire another tool-without-text
+and MUST produce a reply. This handles ANY intent/phrasing naturally — booking, price, hesitance —
+with no keyword list, and addresses the root instead of the symptom. Escalation/link intent from the
+retry is still recovered via the leaked-tool-call extractor, the handoff-promise net, and the
+booking-intent net.
 
-Design + implementation were adversarially reviewed (a false-positive-surface workflow + a wiring
-review). Two findings shaped the final design: (1) a tool-based signal (fire on set_state_flag
-clearing the hesitant flag) was DROPPED because it trusts the model's flag inference on the very turn
-it malfunctioned, and adds the exact stray-link risk without adding real coverage; (2) the negation
-veto was anchored to the token immediately before the phrase so an enthusiastic "I can't wait, book me
-in!" is not wrongly missed. Non-booking empty output still retries-then-escalates (preserving the B5
-hard-message handoff). This is backend-only; no prompt or Layer 1 change needed for B4.
+Only if the corrective retry ALSO comes back empty (rare) does a coarse last-resort net apply: if the
+client's last message is a clear ready-to-book signal (`containsBookingIntent`, new
+src/core/detect-booking-intent.ts — ANCHORED phrases only, with leading-negation / trailing-deferral
+vetoes, reading ONLY the client message, never a tool call), send the booking link; otherwise
+reassurance + escalate (preserving the B5 hard-message handoff). Because the corrective retry handles
+the vast majority, the keyword net's brittleness no longer matters — it is a rare backstop, not the
+primary decision.
+
+Adversarially reviewed across three workflows (false-positive-surface, wiring, and corrective-retry
+loop-safety/behavior). Key review-driven decisions: a tool-based booking signal was DROPPED (it trusts
+the model's flag inference on the very turn it malfunctioned); the negation veto was anchored to the
+immediately-preceding token; and the decisive reliability fix — dropping native tools on the retry —
+came from the behavior lens (prose alone does not stop a tool-happy model from firing another empty
+tool call). Backend-only; no prompt or Layer 1 change needed for B4.
 
 ## 5. Bonus finding for the GHL side
 

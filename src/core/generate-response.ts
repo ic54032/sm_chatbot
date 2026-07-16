@@ -239,6 +239,11 @@ export async function generateResponse(
   let leakedToolCalls: ReturnType<typeof extractLeakedToolCalls>['calls'] = [];
   let sanitized!: Awaited<ReturnType<typeof sanitize>>;
   let vocabLeakRetried = false;
+  // Set only for the empty-output corrective retry: drop native tools on that one
+  // attempt so a tool-happy model physically cannot fire another tool-without-text
+  // and MUST produce a reply. Intent from the retry is still recovered via the
+  // leaked-tool-call extractor, the handoff-promise net, and the booking-intent net.
+  let forceTextRetry = false;
   const MAX_EMPTY_RETRIES = 1;
 
   outer: for (let emptyAttempt = 0; ; emptyAttempt++) {
@@ -249,7 +254,7 @@ export async function generateResponse(
         llmResult = await deps.llm.complete({
           systemPrompt: prompt.systemPrompt,
           messages: prompt.messages,
-          tools: allTools,
+          tools: forceTextRetry ? [] : allTools,
           model: salon.config.llm_model ?? deps.defaultLlmModel,
           maxTokens: 512,
         });
@@ -426,14 +431,38 @@ export async function generateResponse(
           sanitized = { messages: [linkMessage], modifications: ['link_intent_no_text_fallback'] };
           break outer;
         }
-        // B4: empty text on a clear ready-to-book message. Same failure as above
-        // but the model fired a NON-link tool (e.g. set_state_flag clearing the
-        // hesitant flag on "book me in") and no mark_link_sent, so linkSentToolCalled
-        // is false. Escalating a converting client to silence is the worst outcome.
-        // containsBookingIntent reads ONLY the client's message (anchored booking
-        // phrases), never a tool call, so it can never fire because some unrelated
-        // tool ran on a non-booking turn. Genuine escalations were already handled
-        // by the escalationArgs branch above.
+        // Empty output, no escalation or link intent. First try a CORRECTIVE
+        // retry: re-run the SAME generation but tell the model its last reply came
+        // through blank, so it actually writes text this time. This addresses the
+        // root cause — the model fired a tool (e.g. set_state_flag clearing the
+        // hesitant flag on "book me in") and forgot to verbalize — and handles ANY
+        // intent/phrasing naturally (booking, price, hesitance) with no keyword
+        // list. Pushed onto prompt.messages so the next attempt in this loop sees it.
+        if (emptyAttempt < MAX_EMPTY_RETRIES) {
+          // Corrective retry. forceTextRetry drops native tools on the next attempt
+          // so a tool-happy model cannot fire another tool-without-text and MUST
+          // write a reply — far more reliable than prose alone. The nudge is worded
+          // so that even if the model mirrored it, no machinery vocabulary reaches
+          // the client. Append to the last user turn rather than pushing a second
+          // consecutive user message (some providers dislike consecutive same-role).
+          const nudge =
+            '(Reminder: your last turn produced no reply text. Write your reply to the last message now, in plain words, following every rule above.)';
+          const last = prompt.messages[prompt.messages.length - 1];
+          if (last && last.role === 'user' && typeof last.content === 'string') {
+            last.content = `${last.content}\n\n${nudge}`;
+          } else {
+            prompt.messages.push({ role: 'user', content: nudge });
+          }
+          forceTextRetry = true;
+          logger.warn({ conversationId, emptyAttempt }, 'llm produced empty output; corrective retry (tools dropped, text forced)');
+          continue outer;
+        }
+        // The corrective retry ALSO came back empty (rare). Last-resort net for B4:
+        // if the client clearly asked to book, send the link rather than hand a
+        // converting client to a 4h handoff. Anchored keywords are a COARSE net
+        // here by design — the corrective retry already covers the vast majority of
+        // phrasings, so this only has to catch the common ready-to-book lines in the
+        // rare double-empty case. Reads only the client message, never a tool call.
         if (containsBookingIntent(lastInbound?.textContent)) {
           const bookingUrl = salon.sourceOfTruth.booking.url;
           const linkMessage = bookingLinkRecentlySent
@@ -441,25 +470,16 @@ export async function generateResponse(
             : `here you go 🤍 ${bookingUrl}`;
           logger.warn(
             { conversationId, recentlySent: bookingLinkRecentlySent },
-            'empty text on a ready-to-book message; sending booking link fallback (B4)',
+            'empty text on a ready-to-book message after corrective retry; sending booking link fallback (B4)',
           );
           sanitized = { messages: [linkMessage], modifications: ['booking_intent_no_text_fallback'] };
           break outer;
         }
-        // Empty output, no escalation intent: a transient hiccup. Retry the
-        // whole generation once before escalating the (usually booking-intent)
-        // customer to the owner.
-        if (emptyAttempt < MAX_EMPTY_RETRIES) {
-          logger.warn({ conversationId, emptyAttempt }, 'llm produced empty output with no escalation intent; retrying once');
-          await new Promise((r) => setTimeout(r, 500));
-          continue outer;
-        }
-        // Empty again after retry, no intent. We still escalate, but the client
-        // must NOT get pure silence (production 2026: a client pointing out a
-        // price contradiction got dead air here). Send a reassurance line first,
-        // then let the normal post-send path fire the escalation, mirroring the
-        // escalationArgs branch above.
-        logger.warn({ conversationId }, 'llm produced empty output again after retry; sending reassurance then escalating');
+        // Empty again after the corrective retry, no booking intent. We escalate,
+        // but the client must NOT get pure silence (production 2026: a client
+        // pointing out a price contradiction got dead air here). Send a reassurance
+        // line first, then let the normal post-send path fire the escalation.
+        logger.warn({ conversationId }, 'llm produced empty output again after corrective retry; sending reassurance then escalating');
         const owner = salon.sourceOfTruth.salon_basics.owner_first_name;
         sanitized = {
           messages: [`let me grab ${owner} for you, she'll jump in as soon as she's between clients 🤍`],

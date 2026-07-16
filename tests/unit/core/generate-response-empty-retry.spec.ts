@@ -325,10 +325,35 @@ describe('generateResponse — empty-output retry', () => {
 
   // ── B4: empty text on a ready-to-book message ────────────────────────────────
 
-  it('B4: empty text on "book me in" (model fired a non-link tool, no text) sends the LINK, not an escalation', async () => {
+  it('empty output triggers a CORRECTIVE retry; the model then writes a real reply (any phrasing, no keyword needed)', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('yep count me in for saturday'));
+    const llm = new FakeLlmClient();
+    let n = 0;
+    llm.stage({
+      match: () => n++ === 0,
+      output: { text: '', toolCalls: [{ name: 'set_state_flag', arguments: { key: 'client_is_hesitant', value: false } }] },
+    });
+    llm.stage({ match: () => true, output: { text: 'yay 🤍 grab a time in the link above, cannot wait to get you in!', toolCalls: [] } });
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect(llm.calls).toHaveLength(2); // corrective retry
+    // The retry carried the corrective nudge AND dropped native tools so the model
+    // was forced to write text.
+    const retryMessages = llm.calls[1].messages;
+    expect(JSON.stringify(retryMessages)).toContain('in plain words');
+    expect(llm.calls[1].tools).toEqual([]); // tools dropped on the corrective retry
+    const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('grab a time'); // the model's natural reply, not a canned fallback
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+  });
+
+  it('B4 last-resort net: "book me in" empty on BOTH attempts sends the LINK, not an escalation', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('You know what, im ready, book me in'));
     const llm = new FakeLlmClient();
-    // Exact production shape: empty text, a NON-link tool fired (hesitant cleared), no mark_link_sent.
+    // Empty on both the initial call and the corrective retry (rare double-empty).
     llm.stage({
       match: () => true,
       output: { text: '', toolCalls: [{ name: 'set_state_flag', arguments: { key: 'client_is_hesitant', value: false } }] },
@@ -337,7 +362,7 @@ describe('generateResponse — empty-output retry', () => {
 
     await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
 
-    expect(llm.calls).toHaveLength(1); // booking intent caught before the retry
+    expect(llm.calls).toHaveLength(2); // corrective retry, then the booking-intent net
     const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toContain('https://lumenhairstudio.glossgenius.com/book');
