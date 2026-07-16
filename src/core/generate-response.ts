@@ -7,6 +7,7 @@ import * as messagesRepo from '../db/repos/messages.js';
 import * as eventsRepo from '../db/repos/events.js';
 import * as salonsRepo from '../db/repos/salons.js';
 import { sanitize } from '../sanitizer/index.js';
+import { matchInternalVocab } from '../sanitizer/internal-vocab.js';
 import { buildPrompt } from '../prompt/build.js';
 import { allTools } from '../prompt/tools.js';
 import { escalateToOwner } from './escalate.js';
@@ -236,6 +237,7 @@ export async function generateResponse(
   let linkSentToolCalled = false;
   let leakedToolCalls: ReturnType<typeof extractLeakedToolCalls>['calls'] = [];
   let sanitized!: Awaited<ReturnType<typeof sanitize>>;
+  let vocabLeakRetried = false;
   const MAX_EMPTY_RETRIES = 1;
 
   outer: for (let emptyAttempt = 0; ; emptyAttempt++) {
@@ -389,7 +391,6 @@ export async function generateResponse(
           maxEmojis: salon.config.max_emojis,
         },
       });
-      break outer; // usable output produced
     } catch (err) {
       if (err instanceof SanitizerEmptyOutputError) {
         // Empty output with a real escalation intent is fine: the model emitted
@@ -448,12 +449,49 @@ export async function generateResponse(
       }
       throw err;
     }
+
+    // 1.9 tripwire — internal-vocabulary / machinery-narration net (defense in
+    // depth behind Section 12 of the prompt). extractLeakedToolCalls already
+    // stripped bracketed tool SYNTAX; this catches PLAIN-ENGLISH machinery the
+    // model narrates to the client ("I'll note this as the last quoted service",
+    // "let me flag her for the owner") and bare internal terms. Casual style has
+    // few sentence boundaries, so surgically excising the offending clause is
+    // unreliable — instead regenerate a clean reply. If a leak survives the
+    // retry, discard the leaky text entirely: send a reassurance line and hand
+    // off for human review rather than let the client read the bot's plumbing.
+    const vocabLeak = matchInternalVocab(sanitized.messages.join('\n'));
+    if (vocabLeak) {
+      if (emptyAttempt < MAX_EMPTY_RETRIES) {
+        vocabLeakRetried = true;
+        logger.warn(
+          { conversationId, matched: vocabLeak, textPreview: sanitized.messages.join(' ').slice(0, 300) },
+          'internal-vocabulary leak in client reply; regenerating (1.9 tripwire)',
+        );
+        continue outer;
+      }
+      logger.error(
+        { conversationId, matched: vocabLeak, textPreview: sanitized.messages.join(' ').slice(0, 300) },
+        'internal-vocabulary leak persisted after retry; reassurance + escalate (1.9 tripwire)',
+      );
+      const owner = salon.sourceOfTruth.salon_basics.owner_first_name;
+      sanitized = {
+        messages: [`let me grab ${owner} for you, she'll jump in as soon as she's between clients 🤍`],
+        modifications: [...sanitized.modifications, 'internal_vocab_leak_fallback'],
+      };
+      escalationArgs = escalationArgs ?? { reason: 'internal_vocab_leak' };
+    }
+    break outer;
   }
 
   // Record the strip in sanitize_mods so leaked-syntax turns are queryable
   // (ai_raw_output keeps the original text as evidence).
   if (leakedToolCalls.length > 0) {
     sanitized.modifications.push('tool_call_text_stripped');
+  }
+  // A leak the retry cleaned up leaves no trace in the final text; record it in
+  // sanitize_mods so leak turns stay queryable even when recovery succeeded.
+  if (vocabLeakRetried && !sanitized.modifications.includes('internal_vocab_leak_fallback')) {
+    sanitized.modifications.push('internal_vocab_leak_retried');
   }
 
   for (const message of sanitized.messages) {

@@ -105,6 +105,7 @@ describe('generateResponse — empty-output retry', () => {
   let conversationsRepo: typeof import('../../../src/db/repos/conversations.js');
   let escalationsRepo: typeof import('../../../src/db/repos/escalations.js');
   let eventsRepo: typeof import('../../../src/db/repos/events.js');
+  let messagesRepo: typeof import('../../../src/db/repos/messages.js');
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -112,6 +113,7 @@ describe('generateResponse — empty-output retry', () => {
     conversationsRepo = await import('../../../src/db/repos/conversations.js');
     escalationsRepo = await import('../../../src/db/repos/escalations.js');
     eventsRepo = await import('../../../src/db/repos/events.js');
+    messagesRepo = await import('../../../src/db/repos/messages.js');
     vi.mocked(escalationsRepo.upsertActive).mockResolvedValue(undefined);
     vi.mocked(eventsRepo.recentBookingLinkSent).mockResolvedValue(false);
   });
@@ -270,5 +272,54 @@ describe('generateResponse — empty-output retry', () => {
     const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
     expect(sent[0]).toContain('let me grab Renata');
     expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'refund_request', null);
+  });
+
+  // ── 1.9 tripwire: internal-vocabulary / machinery-narration net ──────────────
+
+  it('reply that leaks internal machinery is REGENERATED; the clean retry is sent, tagged internal_vocab_leak_retried', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('how much for balayage?'));
+    const llm = new FakeLlmClient();
+    let n = 0;
+    // First reply narrates plumbing to the client; second is clean.
+    llm.stage({
+      match: () => n++ === 0,
+      output: { text: "balayage starts around $220 🤍 I'll note this as the last quoted service", toolCalls: [] },
+    });
+    llm.stage({ match: () => true, output: { text: 'balayage starts around $220 🤍', toolCalls: [] } });
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect(llm.calls).toHaveLength(2); // leak -> regenerate
+    const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toBe('balayage starts around $220 🤍');
+    expect(sent[0]).not.toContain('note this'); // machinery never reached the client
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+    // Recovered-by-retry leak is still queryable in sanitize_mods.
+    const outMods = vi.mocked(messagesRepo.insertOutbound).mock.calls[0][1].sanitizeMods;
+    expect(outMods).toContain('internal_vocab_leak_retried');
+  });
+
+  it('leak that SURVIVES the retry is discarded: reassurance line is sent + escalation reason internal_vocab_leak', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('how much for balayage?'));
+    const llm = new FakeLlmClient();
+    // Both attempts narrate machinery — the model is malfunctioning this turn.
+    llm.stage({ match: () => true, output: { text: "sure 🤍 let me flag her for the owner and mark_link_sent", toolCalls: [] } });
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect(llm.calls).toHaveLength(2); // original + one retry, both leak
+    const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('let me grab Renata'); // clean reassurance, not the leaky text
+    expect(sent[0]).not.toContain('flag her');
+    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      'internal_vocab_leak',
+      null,
+    );
   });
 });

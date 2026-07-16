@@ -206,6 +206,28 @@ B6 concurrency bug koji je popravljen answered-guardom):
   ne možemo potvrditi da je baš reel (izgleda isto kao story/view-once), pa idemo na sigurnu
   generičku eskalaciju umjesto ubacivanja markera.
 
+## 4f. 1.9 backend tripwire — internal-vocab denylist (P0)
+
+Backend mreža iza prompt-pravila iz Sekcije 12 ("Never narrate your own machinery").
+`extractLeakedToolCalls` već skida **bracket sintaksu** (`[mark_link_sent()]`); ovo hvata
+**plain-English mašineriju** koju to ne vidi: "I'll note this as the last quoted service",
+"flagging this for the owner", "putting this in the system", + interne termine (state flag,
+reason code, escalate_to_owner).
+
+- **Modul** `src/sanitizer/internal-vocab.ts` — denylist tijesnih, scoped regexa
+  (first-person/gerund za bookkeeping glagole, object-scoped, owner-scoped za routing) pa
+  casual govor ("noted 🤍", "mark your calendar", "flag her down", "hand off boju stilistu",
+  "before things escalate") NE okida tripwire.
+- **Ponašanje** (`generate-response.ts`): match → **regeneriraj odgovor jednom** (dijeli
+  `MAX_EMPTY_RETRIES` budžet). Ako leak preživi retry → leaky tekst se **odbacuje**, šalje se
+  reassurance linija + `escalate_to_owner(internal_vocab_leak)`. Klijent nikad ne vidi
+  mašineriju. Recovered-by-retry leak se bilježi u `sanitize_mods` (`internal_vocab_leak_retried`)
+  za queryabilnost.
+- **Adversarijalno reviewano** (2 leće): review je potvrdio wiring ispravnim i našao 4 lažna
+  pozitiva + gerund lažne negative (`noting your interest`, `flagging this for the owner` —
+  oba eksplicitno u Sekciji 12) — sve popravljeno; korpus od 52 testa (30 leak + 22 legit)
+  čuva od regresija (29 leak-primjera + 23 legit-primjera).
+
 ## 5. Bonus nalaz za GHL stranu
 
 Klijentov text bubble **"Do you do this type of hair?"** (poslan uz shareani IG post,
