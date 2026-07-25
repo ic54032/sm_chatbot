@@ -9,6 +9,7 @@ import * as salonsRepo from '../db/repos/salons.js';
 import { sanitize } from '../sanitizer/index.js';
 import { matchInternalVocab } from '../sanitizer/internal-vocab.js';
 import { containsBookingIntent } from './detect-booking-intent.js';
+import { isRetryableLlmError } from '../llm/is-retryable.js';
 import { buildPrompt } from '../prompt/build.js';
 import { allTools } from '../prompt/tools.js';
 import { escalateToOwner } from './escalate.js';
@@ -245,6 +246,9 @@ export async function generateResponse(
   // leaked-tool-call extractor, the handoff-promise net, and the booking-intent net.
   let forceTextRetry = false;
   const MAX_EMPTY_RETRIES = 1;
+  // How long one llm_failed notification covers. A model outage hits every
+  // inbound identically, so without this the owner gets an alert per message.
+  const LLM_FAILED_DEDUP_MINUTES = 30;
 
   outer: for (let emptyAttempt = 0; ; emptyAttempt++) {
     // LLM call with exception-retry (up to 3 API failures -> llm_failed).
@@ -270,18 +274,46 @@ export async function generateResponse(
         break;
       } catch (err) {
         apiAttempts++;
-        logger.warn({ err, apiAttempts, conversationId }, 'llm.complete failed; retrying');
-        if (apiAttempts >= 3) {
-          await escalateToOwner({
-            db: deps.db,
-            ghl: deps.ghl,
-            salon,
-            conversation: ctx.conversation,
-            reason: 'llm_failed',
-          });
+        const retryable = isRetryableLlmError(err);
+        logger.warn({ err, apiAttempts, retryable, conversationId }, 'llm.complete failed');
+
+        // Retry only transient failures. A bad key, a retired model, or an
+        // exhausted quota fails identically every time, so three attempts just
+        // add latency and noise to an outage a human has to fix.
+        if (retryable && apiAttempts < 3) {
+          await new Promise((r) => setTimeout(r, 500 * 2 ** apiAttempts));
+          continue;
+        }
+
+        // Terminal. Dedup first: a broken model account fails every inbound the
+        // same way, and one red notification per client message buries the owner
+        // (production 2026-07-22: nine in a day). Inside the window, stay quiet
+        // entirely — the client already got a line and the owner already knows.
+        const alreadyNotified = await eventsRepo.recentEscalationWithReason(
+          deps.db,
+          conversationId,
+          'llm_failed',
+          LLM_FAILED_DEDUP_MINUTES,
+        );
+        if (alreadyNotified) {
+          logger.error(
+            { err, conversationId },
+            'llm call failed again within the dedup window; skipping duplicate escalation',
+          );
           return { latestInboundAt: null };
         }
-        await new Promise((r) => setTimeout(r, 500 * 2 ** apiAttempts));
+
+        // The client must not sit in silence while the owner is pulled in.
+        // Route through the normal send path so the line is delivered, recorded,
+        // and the escalation fires after it (same shape as the B5 fallback).
+        logger.error({ err, conversationId }, 'llm call failed terminally; reassuring client then escalating');
+        const owner = salon.sourceOfTruth.salon_basics.owner_first_name;
+        sanitized = {
+          messages: [`let me grab ${owner} for you, she'll jump in as soon as she's between clients 🤍`],
+          modifications: ['llm_failed_fallback_text'],
+        };
+        escalationArgs = { reason: 'llm_failed' };
+        break outer;
       }
     }
 
@@ -546,10 +578,12 @@ export async function generateResponse(
       await messagesRepo.insertOutbound(deps.db, {
         conversationId,
         textContent: message,
-        aiRawOutput: llmResult.text,
+        // llmResult is unset when the API call itself never succeeded (the
+        // llm_failed path still sends the client a line), so read it defensively.
+        aiRawOutput: llmResult?.text ?? null,
         sanitizeMods: sanitized.modifications,
-        promptTokens: llmResult.usage.inputTokens,
-        completionTokens: llmResult.usage.outputTokens,
+        promptTokens: llmResult?.usage.inputTokens ?? 0,
+        completionTokens: llmResult?.usage.outputTokens ?? 0,
         costUsd: null,
         ghlMessageId: sent.ghlMessageId,
       });

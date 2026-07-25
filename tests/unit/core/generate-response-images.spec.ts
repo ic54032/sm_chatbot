@@ -35,6 +35,7 @@ vi.mock('../../../src/db/repos/messages.js', () => ({
 vi.mock('../../../src/db/repos/events.js', () => ({
   recentBookingLinkSent: vi.fn().mockResolvedValue(false),
   latestRepliedInboundAt: vi.fn().mockResolvedValue(null),
+  recentEscalationWithReason: vi.fn().mockResolvedValue(false),
   insert: vi.fn().mockResolvedValue(undefined),
 }));
 

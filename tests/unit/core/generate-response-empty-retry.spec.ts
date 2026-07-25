@@ -21,6 +21,7 @@ vi.mock('../../../src/db/repos/messages.js', () => ({
 vi.mock('../../../src/db/repos/events.js', () => ({
   recentBookingLinkSent: vi.fn().mockResolvedValue(false),
   latestRepliedInboundAt: vi.fn().mockResolvedValue(null),
+  recentEscalationWithReason: vi.fn().mockResolvedValue(false),
   insert: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../../../src/db/repos/escalations.js', () => ({
@@ -366,6 +367,80 @@ describe('generateResponse — empty-output retry', () => {
     const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toContain('https://lumenhairstudio.glossgenius.com/book');
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+  });
+
+  // ── llm_failed: no silence, no alert storm, no pointless retries ────────────
+
+  /** An LlmClient whose every call throws `error`, counting attempts. */
+  function makeFailingLlm(error: unknown) {
+    const calls: number[] = [];
+    return {
+      calls,
+      complete: vi.fn(async () => {
+        calls.push(1);
+        throw error;
+      }),
+    } as never;
+  }
+
+  it('llm_failed sends the client a reassurance line instead of silence, then escalates', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('hey, quick question'));
+    const llm = makeFailingLlm(new Error('socket hang up')); // transient -> retried
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('let me grab Renata'); // client is never left in silence
+    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      'llm_failed',
+      null,
+    );
+  });
+
+  it('does NOT retry a deterministic failure (exhausted quota) — one attempt, not three', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('can i get a balayage'));
+    const quotaError = Object.assign(new Error('You exceeded your current quota'), {
+      status: 429,
+      code: 'insufficient_quota',
+    });
+    const llm = makeFailingLlm(quotaError);
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect((llm as unknown as { calls: number[] }).calls).toHaveLength(1);
+    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      'llm_failed',
+      null,
+    );
+  });
+
+  it('still retries a transient failure three times before giving up', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('hi'));
+    const llm = makeFailingLlm(Object.assign(new Error('bad gateway'), { status: 502 }));
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect((llm as unknown as { calls: number[] }).calls).toHaveLength(3);
+  });
+
+  it('dedups the alert storm: a repeat llm_failed inside the window is silent, no second escalation', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('hey, quick question'));
+    vi.mocked(eventsRepo.recentEscalationWithReason).mockResolvedValue(true); // owner already alerted
+    const llm = makeFailingLlm(new Error('socket hang up'));
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect(ghl.sendMessage).not.toHaveBeenCalled(); // no repeated reassurance either
     expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
   });
 

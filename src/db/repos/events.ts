@@ -30,6 +30,43 @@ export async function recentBookingLinkSent(db: Db, conversationId: string, with
   return !!found;
 }
 
+/**
+ * Was this conversation already escalated for `reason` within the last
+ * `withinMinutes`? Used to stop an alert storm: a broken model account fails
+ * every inbound identically, and without this the owner gets one red
+ * notification per client message (production 2026-07-22: nine in a day).
+ */
+export async function recentEscalationWithReason(
+  db: Db,
+  conversationId: string,
+  reason: string,
+  withinMinutes: number,
+): Promise<boolean> {
+  const cutoff = new Date(Date.now() - withinMinutes * 60 * 1000);
+  const rows = await db
+    .selectFrom('conversation_events')
+    .where('conversation_id', '=', conversationId)
+    .where('event_type', '=', 'escalated_to_owner')
+    .where('created_at', '>=', cutoff)
+    .select('payload')
+    .execute();
+
+  // The reason lives inside the JSON payload. Filtering here rather than in SQL
+  // keeps this dialect-agnostic, and the window only ever holds a few rows.
+  return rows.some((row) => {
+    const payload = typeof row.payload === 'string' ? safeParse(row.payload) : row.payload;
+    return (payload as { reason?: unknown } | null)?.reason === reason;
+  });
+}
+
+function safeParse(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
 /** created_at of the newest inbound message a prior reply actually addressed,
  * recorded via a 'replied' event's answeredInboundAt payload. The answered-guard
  * compares the newest loaded inbound against this to decide whether there is

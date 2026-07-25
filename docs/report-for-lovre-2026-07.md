@@ -310,13 +310,21 @@ escalations" reading was a scheduling coincidence: the escalation tests happened
 balance ran out.) F13's "silent death" is the same event downstream — an `llm_failed` escalation
 sets the 4h handoff, so the next message is silently paused by design.
 
-That said, the outage exposed three real weaknesses that would repeat on the next quota/key failure:
+That said, the outage exposed four real weaknesses that would repeat on the next quota/key failure.
+All four are now fixed, so the next model outage degrades quietly instead of melting down:
 
-1. **Alert storm.** Nine escalations in one day, one per message. Needs per-conversation/per-window
-   dedup for `llm_failed` so the owner never gets a red alert because a client said hi.
-2. **Pointless retries.** The LLM call is retried 3× on ANY exception, including deterministic 4xx
-   (401 invalid key, 404 model retired, quota). Retry should be limited to 5xx/timeout/429-rate-limit.
-3. **Empty prompt turns (fixed here).** A media-only message is stored with `text_content = NULL`,
+0. **Silence to the client (fixed).** `llm_failed` escalated without sending anything, so the client
+   sat in dead air. It now routes through the normal send path: the client gets the reassurance line
+   first, then the escalation fires — the behaviour Section 1 of the QA report asks for.
+1. **Alert storm (fixed).** Nine escalations in one day, one per message. `llm_failed` is now deduped
+   per conversation over a 30-minute window: the first failure notifies the owner and answers the
+   client, repeats inside the window are handled silently. The owner never gets a red alert because
+   a client said hi.
+2. **Pointless retries (fixed).** The LLM call was retried 3× on ANY exception, including
+   deterministic ones (401 invalid key, 404 retired model, exhausted quota — which arrives as a 429
+   but never clears). Retries are now limited to transient failures: network/timeout, 5xx, and
+   genuine rate limiting. The 21 Jul outage burned three calls per inbound for nothing.
+3. **Empty prompt turns (fixed).** A media-only message is stored with `text_content = NULL`,
    and the prompt builder rendered it as `{ role: 'user', content: '' }` — which OpenAI and Anthropic
    both reject. Since the row stays in the loaded window, this WOULD have poisoned every later call on
    that conversation until it scrolled out. It was not the cause of this outage, but it was a live
