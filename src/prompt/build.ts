@@ -2,6 +2,7 @@ import type { Salon, ConversationContext } from '../core/types.js';
 import type { ContentBlock } from '../llm/client.js';
 import type { ProcessedImage } from '../images/process.js';
 import { loadMasterPrompt } from './load-master-prompt.js';
+import { mediaMarkerFor, MARKER_PHOTO_FAILED } from './media-marker.js';
 
 export interface BuildPromptInput {
   salon: Salon;
@@ -98,12 +99,21 @@ ${JSON.stringify(sot, null, 2)}`;
         // marker routes the model to its attachment-not-visible behavior (ask
         // for a resend warmly, no technical excuse). Any caption is kept.
         const caption = m.textContent ? `${m.textContent} ` : '';
-        messages.push({ role: 'user', content: `${caption}[photo not received]` });
+        messages.push({ role: 'user', content: `${caption}${MARKER_PHOTO_FAILED}` });
       } else {
-        messages.push({ role: 'user', content: m.textContent ?? '' });
+        // A media-only message (video, voice note, shared reel, view-once) has
+        // no text. Emitting "" here would produce an API-invalid empty content
+        // block and, since the row stays in the loaded window, would fail EVERY
+        // later call on this conversation. Describe what arrived instead.
+        // The marker is added even when a caption is present, so "can you do
+        // this?" sent with a video does not read as a standalone question.
+        const content = [m.textContent, mediaMarkerFor(m)].filter(Boolean).join(' ');
+        if (content) messages.push({ role: 'user', content });
       }
     } else if (m.direction === 'outbound' || m.direction === 'owner') {
-      messages.push({ role: 'assistant', content: m.textContent ?? '' });
+      // Same invariant on the assistant side: never emit an empty turn.
+      const content = m.textContent ?? '';
+      if (content) messages.push({ role: 'assistant', content });
     }
   }
 

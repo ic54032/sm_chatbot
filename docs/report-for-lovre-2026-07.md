@@ -299,6 +299,56 @@ immediately-preceding token; and the decisive reliability fix — dropping nativ
 came from the behavior lens (prose alone does not stop a tool-happy model from firing another empty
 tool call). Backend-only; no prompt or Layer 1 change needed for B4.
 
+## 4i. Round 2 blocker `llm_failed` — root cause, and a latent bug it exposed
+
+**Root cause: the OpenAI account ran out of credit.** Not per-conversation poisoning. The DB is
+unambiguous: 21 Jul had 49 inbound / 41 replies, then the last successful reply was 21 Jul 17:52:44
+and from that moment EVERY call failed — across three different contacts, on plain text messages
+("hey, quick question"), in threads containing no media at all. A global account-level failure, not
+a per-thread one. Confirmed by the owner topping the balance back up. (The tester's "clusters after
+escalations" reading was a scheduling coincidence: the escalation tests happened to run right as the
+balance ran out.) F13's "silent death" is the same event downstream — an `llm_failed` escalation
+sets the 4h handoff, so the next message is silently paused by design.
+
+That said, the outage exposed three real weaknesses that would repeat on the next quota/key failure:
+
+1. **Alert storm.** Nine escalations in one day, one per message. Needs per-conversation/per-window
+   dedup for `llm_failed` so the owner never gets a red alert because a client said hi.
+2. **Pointless retries.** The LLM call is retried 3× on ANY exception, including deterministic 4xx
+   (401 invalid key, 404 model retired, quota). Retry should be limited to 5xx/timeout/429-rate-limit.
+3. **Empty prompt turns (fixed here).** A media-only message is stored with `text_content = NULL`,
+   and the prompt builder rendered it as `{ role: 'user', content: '' }` — which OpenAI and Anthropic
+   both reject. Since the row stays in the loaded window, this WOULD have poisoned every later call on
+   that conversation until it scrolled out. It was not the cause of this outage, but it was a live
+   landmine: 39 such rows exist in production.
+
+Fix for (3) plus **a PROMPT change to backport (Section 8)**: media-only turns now render as a plain
+marker instead of empty content, and `buildPrompt` will never emit an empty turn on either side.
+Markers: `[client sent a video]`, `[client sent a voice note]`, `[client sent an attachment that did
+not come through]` (the shared-reel / view-once case), alongside the existing `[photo not received]`.
+The new Section 8 rule tells the model these are notes to itself: never repeat a marker back, never
+claim to have watched/heard/seen the media, never name a technical limitation, and move the
+conversation forward by asking what the client is after.
+
+### What GHL actually delivers for Instagram media (verified against production payloads)
+
+| Client sends | Reaches the backend? | Evidence |
+|---|---|---|
+| Photo | YES, with a URL | `attachments:[{url:".../*.jpeg", type:"image"}]` |
+| **Video** | **YES, with a URL** | `attachments:[{url:".../*.mp4", type:"video"}]` |
+| GIF | YES, as an image URL | `.gif` typed `image` |
+| **Shared reel** | **NO** | `attachments: []` — GHL drops reel content at ingestion; it renders as an empty bubble in GHL's own inbox too |
+| View-once photo | NO | Meta does not deliver it at all |
+
+So real video understanding is achievable today with no GHL work — the URL is already in hand; we
+currently hard-escalate video by design, not because the media is missing. Shared reels are the only
+case that is genuinely unrecoverable through GHL, which is why they escalate to the owner.
+
+Note for Meta-level context: Meta's messages webhook HAS supported `ig_reel` attachments (with url,
+title, reel_video_id) since ~June 2024, so the reel content exists one layer up — GHL simply does not
+surface it. Voice notes arrive as `.mp4`, which is why our URL-extension heuristic mislabels them as
+`video_attachment` (QA item 3.2); distinguishing them needs a `Content-Type` check.
+
 ## 5. Bonus finding for the GHL side
 
 The client's text bubble **"Do you do this type of hair?"** (sent alongside a shared IG post,

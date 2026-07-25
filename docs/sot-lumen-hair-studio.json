@@ -1,0 +1,284 @@
+{
+  "faq": [
+    {
+      "answer": "We are by appointment only, but it is always worth asking if there is a same-day opening. The booking link shows live availability.",
+      "question": "Do you take walk-ins?"
+    },
+    {
+      "answer": "Free street parking on Pearl after 6pm and all day Sunday. There is a paid lot on 18th and Pearl about 2 minutes away, plus metered spots out front during the day.",
+      "question": "Where do I park?"
+    },
+    {
+      "answer": "Through our booking link. You pick your service, your stylist, and a time that works for you.",
+      "question": "How do I book?"
+    },
+    {
+      "answer": "Totally normal, especially for color. Book a free consultation and we will figure out the right plan together.",
+      "question": "What if I am not sure what service I need?"
+    },
+    {
+      "answer": "Yes, Renata handles all color corrections. It always starts with a consultation so she can see the hair in person and build the right plan.",
+      "question": "Do you do color correction?"
+    },
+    {
+      "answer": "Full balayage runs in a range depending on your length and how much hair you have. The best way to get an exact number is a quick consultation.",
+      "question": "How much is balayage?"
+    },
+    {
+      "answer": "It varies by service. A balayage can run a few hours, a root touch-up is closer to 90 minutes. Your stylist will confirm timing when you book.",
+      "question": "How long does a color appointment take?"
+    },
+    {
+      "answer": "Yes, hand-tied extensions with Mia and Renata. New extension clients start with a consultation so we can match your color and assess the right amount of hair.",
+      "question": "Do you do extensions?"
+    },
+    {
+      "answer": "Usually every 6 to 8 weeks depending on how fast your hair grows and how you wear them.",
+      "question": "How often do I need an extensions move-up?"
+    },
+    {
+      "answer": "Come with clean dry hair that is free of heavy product. If you have inspo photos, bring them, they help a lot.",
+      "question": "What should I do to prep my hair before a color appointment?"
+    },
+    {
+      "answer": "Yes, we carry professional haircare and can recommend what suits your hair at your appointment.",
+      "question": "Do you sell products?"
+    },
+    {
+      "answer": "We do. Send us a message and we will get one sorted for you.",
+      "question": "Do you offer gift cards?"
+    },
+    {
+      "answer": "Of course. Just keep in mind color services run long, so plan accordingly if you are bringing little ones.",
+      "question": "Are kids welcome?"
+    },
+    {
+      "answer": "Tuesday and Wednesday 10am to 7pm, Thursday 10am to 8pm, Friday 9am to 6pm, Saturday 9am to 5pm. Closed Sunday and Monday.",
+      "question": "What are your hours?"
+    },
+    {
+      "answer": "1847 Pearl Street, Suite 3, in Denver.",
+      "question": "Where are you located?"
+    },
+    {
+      "answer": "We ask for 24 hours notice to cancel or reschedule. Cancellations under 24 hours are charged 50% of the service.",
+      "question": "What is your cancellation policy?"
+    },
+    {
+      "answer": "There is a 15 minute grace period. After that we may need to shorten or reschedule so we stay on time for the next guest.",
+      "question": "What happens if I am running late?"
+    },
+    {
+      "answer": "Check the booking link for live openings. Same-day spots pop up when there is a cancellation.",
+      "question": "Can I see someone today?"
+    },
+    {
+      "answer": "Nope, consultations are free, 15 to 20 minutes, and bookable through the same link. No pressure to book after.",
+      "question": "Do consultations cost anything?"
+    }
+  ],
+  "booking": {
+    "url": "https://lumenhairstudio.glossgenius.com/book",
+    "platform": "GlossGenius",
+    "new_vs_returning": "Same link for everyone. New clients are guided to pick a consultation first if they are unsure what to book.",
+    "what_client_sees": "A list of services and stylists with open time slots. Client picks a service, a stylist, and a time, then enters their info and a card to hold the spot.",
+    "consultations_bookable_here": true
+  },
+  "pricing": [
+    {
+      "notes": "Price depends on length and density. Toner included.",
+      "price": "$220-$320",
+      "category": "Color",
+      "service_name": "Full Balayage",
+      "duration_minutes": "180-240"
+    },
+    {
+      "notes": "Face frame and crown focus.",
+      "price": "$170-$240",
+      "category": "Color",
+      "service_name": "Partial Balayage",
+      "duration_minutes": "150-180"
+    },
+    {
+      "notes": null,
+      "price": "$190-$270",
+      "category": "Color",
+      "service_name": "Full Highlights",
+      "duration_minutes": "180"
+    },
+    {
+      "notes": "Single process regrowth color.",
+      "price": "$95-$130",
+      "category": "Color",
+      "service_name": "Root Touch-Up",
+      "duration_minutes": "90"
+    },
+    {
+      "notes": null,
+      "price": "$110-$160",
+      "category": "Color",
+      "service_name": "All-Over Color",
+      "duration_minutes": "120"
+    },
+    {
+      "notes": "Great between color appointments.",
+      "price": "$55-$85",
+      "category": "Color",
+      "service_name": "Gloss or Toner Refresh",
+      "duration_minutes": "45"
+    },
+    {
+      "notes": "Renata only. Always starts with a consultation.",
+      "price": "By consultation",
+      "category": "Color",
+      "service_name": "Color Correction",
+      "duration_minutes": null
+    },
+    {
+      "notes": "Includes wash and rough dry.",
+      "price": "$65-$95",
+      "category": "Cut",
+      "service_name": "Womens Haircut",
+      "duration_minutes": "60"
+    },
+    {
+      "notes": null,
+      "price": "$45-$65",
+      "category": "Cut",
+      "service_name": "Blowout",
+      "duration_minutes": "45"
+    },
+    {
+      "notes": "Updos and event styling.",
+      "price": "$85-$120",
+      "category": "Cut",
+      "service_name": "Special Occasion Styling",
+      "duration_minutes": "60"
+    },
+    {
+      "notes": "Hair plus install. Consultation required first.",
+      "price": "By consultation",
+      "category": "Extensions",
+      "service_name": "Hand-Tied Extensions Install",
+      "duration_minutes": null
+    },
+    {
+      "notes": "Maintenance every 6 to 8 weeks.",
+      "price": "$150-$250",
+      "category": "Extensions",
+      "service_name": "Extensions Move-Up",
+      "duration_minutes": "120"
+    },
+    {
+      "notes": "Added to a color service.",
+      "price": "$35",
+      "category": "Treatment",
+      "service_name": "K18 Bond Repair Add-On",
+      "duration_minutes": "20"
+    },
+    {
+      "notes": null,
+      "price": "$25",
+      "category": "Treatment",
+      "service_name": "Deep Conditioning Add-On",
+      "duration_minutes": "20"
+    },
+    {
+      "notes": "Color, color correction, or extensions.",
+      "price": "Free",
+      "category": "Other",
+      "service_name": "Consultation",
+      "duration_minutes": "15-20"
+    }
+  ],
+  "policies": {
+    "deposit": "A card on file is required to book. A 50% deposit is taken for color corrections and extension installs.",
+    "no_show": "No-shows are charged the full price of the booked service.",
+    "cancellation": "24 hour notice required to cancel or reschedule. Cancellations under 24 hours are charged 50% of the booked service.",
+    "late_arrival": "15 minute grace period. After 15 minutes the appointment may be shortened or rescheduled at the stylist's discretion.",
+    "first_time_client": "New color and extension clients are encouraged to book a free consultation first so we can match the goal to the right service and give an accurate quote."
+  },
+  "salon_basics": {
+    "address": "1847 Pearl Street, Suite 3, Denver, CO 80203",
+    "parking": "Free street parking on Pearl after 6pm and all day Sunday. Paid lot on the corner of 18th and Pearl, about a 2 minute walk. Metered spots out front during the day.",
+    "salon_name": "Lumen Hair Studio",
+    "website_url": "https://lumenhairstudio.com",
+    "phone_number": "(303) 555-0142",
+    "operating_hours": {
+      "friday": "9am to 6pm",
+      "monday": "closed",
+      "sunday": "closed",
+      "tuesday": "10am to 7pm",
+      "saturday": "9am to 5pm",
+      "thursday": "10am to 8pm",
+      "wednesday": "10am to 7pm"
+    },
+    "instagram_handle": "@lumenhairstudio",
+    "owner_first_name": "Renata",
+    "phone_share_with_clients": false
+  },
+  "service_menu": {
+    "color": "Lumen does full and partial balayage, foilayage, full highlights, root touch-ups, all-over color, glosses, and color correction. Blonding and lived-in color are the studio's signature. Color correction from previous work elsewhere is handled by Renata and always starts with a consultation.",
+    "other": "Free 15 to 20 minute consultations for color, color correction, and extensions, bookable through the same link.",
+    "extensions": "Hand-tied extensions for length and fullness. Mia and Renata handle extensions. New extension clients book a consultation first to match color and assess fit, since pricing depends heavily on the amount of hair and the install.",
+    "treatments": "K18 bond repair, gloss and toner refreshes, and deep conditioning add-ons. These are usually added onto a color appointment rather than booked alone.",
+    "not_offered": [
+      "nails",
+      "lashes",
+      "makeup",
+      "brows",
+      "perms",
+      "barbering"
+    ],
+    "cuts_and_styling": "Womens cuts, dry cuts, blowouts, and special-occasion styling. Cuts are available with all three stylists. Blowouts are a popular add-on after color."
+  },
+  "off_limits_topics": "No salon-specific off-limits topics beyond the standard bot guardrails.",
+  "stylist_directory": {
+    "stylists": [
+      {
+        "full_name": "Renata Vasquez",
+        "specialties": [
+          "color correction",
+          "lived-in balayage",
+          "blonding",
+          "extensions consultations"
+        ],
+        "preferred_name": "Renata",
+        "years_experience": 16,
+        "handles_color_corrections": true
+      },
+      {
+        "full_name": "Tasha Bell",
+        "specialties": [
+          "balayage",
+          "vivids",
+          "fashion color",
+          "cuts"
+        ],
+        "preferred_name": "Tash",
+        "years_experience": 8,
+        "handles_color_corrections": false
+      },
+      {
+        "full_name": "Mia Chen",
+        "specialties": [
+          "hand-tied extensions",
+          "blowouts",
+          "styling",
+          "root touch-ups"
+        ],
+        "preferred_name": "Mia",
+        "years_experience": 5,
+        "handles_color_corrections": false
+      }
+    ],
+    "color_correction_routing": "Renata"
+  },
+  "handoff_notification": {
+    "notified_party": "owner",
+    "preferred_channel": "both",
+    "sms_fallback_number": "(303) 555-0142"
+  },
+  "price_quoting_policy": "b",
+  "voice_and_tone_notes": "Renata calls regulars 'love' and is warm but not over the top. Keep it friendly and grounded, not bubbly or salesy."
+}

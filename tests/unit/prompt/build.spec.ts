@@ -241,4 +241,51 @@ describe('buildPrompt time awareness', () => {
     const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
     expect(result.systemPrompt).toContain('- Hours since last client message: 0');
   });
+
+  // The llm_failed class of bug: a media-only row (text_content NULL) used to
+  // render as { role:'user', content:'' }, which the OpenAI/Anthropic APIs
+  // reject. Because the row stays in the loaded window, EVERY later call on that
+  // conversation failed identically until it scrolled out.
+  describe('never emits an empty content turn (API-invalid)', () => {
+    const media = (
+      id: string,
+      atts: Array<{ type: string }>,
+      text: string | null = null,
+    ): ConversationContext['recentMessages'][number] => ({
+      ...makeMsg(id, 'inbound', text),
+      channelType: 'image',
+      rawContent: { attachments: atts },
+    });
+
+    it('renders a video-only message as a marker, not an empty string', () => {
+      const ctx = baseCtx([media('m1', [{ type: 'video' }]), makeMsg('m2', 'inbound', 'hey did you see it?')]);
+      const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
+      expect(result.messages[0].content).toBe('[client sent a video]');
+      expect(result.messages.every((m) => m.content !== '')).toBe(true);
+    });
+
+    it('renders a voice note and a dropped reel as their own markers', () => {
+      const ctx = baseCtx([media('m1', [{ type: 'audio' }]), media('m2', [])]);
+      const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
+      expect(result.messages[0].content).toBe('[client sent a voice note]');
+      expect(result.messages[1].content).toBe('[client sent an attachment that did not come through]');
+    });
+
+    it('keeps a caption and appends the marker when both are present', () => {
+      const ctx = baseCtx([media('m1', [{ type: 'video' }], 'can you do this?')]);
+      const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
+      expect(result.messages[0].content).toBe('can you do this? [client sent a video]');
+    });
+
+    it('drops a genuinely empty turn entirely rather than emitting empty content', () => {
+      const ctx = baseCtx([
+        makeMsg('m1', 'inbound', null), // text channel, no text, no attachments
+        makeMsg('m2', 'outbound', ''), // empty assistant turn
+        makeMsg('m3', 'inbound', 'hello?'),
+      ]);
+      const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].content).toBe('hello?');
+    });
+  });
 });
