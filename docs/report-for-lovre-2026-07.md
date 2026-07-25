@@ -357,6 +357,32 @@ title, reel_video_id) since ~June 2024, so the reel content exists one layer up 
 surface it. Voice notes arrive as `.mp4`, which is why our URL-extension heuristic mislabels them as
 `video_attachment` (QA item 3.2); distinguishing them needs a `Content-Type` check.
 
+## 4j. QA 4.1 and 4.2 are the SAME backend bug, not a prompt regression
+
+Round 2 filed these as two separate prompt problems: escalations shipping identical text (4.1), and
+the hesitant first-timer "losing all empathy" (4.2). Both are one backend behaviour.
+
+The evidence is the literal strings. E2/E4/E5 all produced *"let me grab Renata for you, she'll jump
+in as soon as she's between clients 🤍"*, and E1 produced *"here you go 🤍 [link]"* and then *"the
+booking link I sent has all the latest openings 🤍"*. Those are our HARDCODED fallbacks, character
+for character. They only fire when the model returns no reply text at all. So the prompt never
+regressed: what the tester graded as a voice regression was the model going silent and our canned
+line speaking for it. Production data backs this up — on 21 Jul, 7 of 41 replies (17%) were canned.
+
+Root cause: on empty output, the branches for "escalation intent" and "link intent" short-circuited
+straight to a canned line. They were designed as a rare backstop and became the default voice.
+
+Fix: the corrective retry now runs FIRST for every empty output, whatever intent was signalled. The
+retry re-runs the generation with a short nudge and with native tools disabled, so a tool-happy model
+cannot fire another tool-without-text and has to write a reply. Intent from the first attempt is
+carried across (the retry has no tools, so it cannot re-signal an escalation the client was already
+promised or a link it meant to send), and if the escalation still has to fall back to the canned line
+it keeps its ORIGINAL reason instead of being relabelled a generic empty-output failure.
+
+Result: a refund gets refund-shaped warmth, a medical question gets its own, and the hesitant
+first-timer gets empathy plus consult framing — all written by the model, with the canned lines back
+to being the rare backstop they were meant to be. No prompt or Layer 1 change is needed for 4.1/4.2.
+
 ## 5. Bonus finding for the GHL side
 
 The client's text bubble **"Do you do this type of hair?"** (sent alongside a shared IG post,

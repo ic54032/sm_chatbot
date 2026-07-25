@@ -245,6 +245,10 @@ export async function generateResponse(
   // and MUST produce a reply. Intent from the retry is still recovered via the
   // leaked-tool-call extractor, the handoff-promise net, and the booking-intent net.
   let forceTextRetry = false;
+  // Intent recovered on an attempt that produced NO text, carried into the
+  // corrective retry (which runs without tools and so cannot re-fire it).
+  let carriedEscalationArgs: { reason: string; contextSummary?: string } | undefined;
+  let carriedLinkIntent = false;
   const MAX_EMPTY_RETRIES = 1;
   // How long one llm_failed notification covers. A model outage hits every
   // inbound identically, so without this the owner gets an alert per message.
@@ -331,9 +335,13 @@ export async function generateResponse(
       );
     }
 
-    // Fresh intent per attempt.
-    escalationArgs = undefined;
-    linkSentToolCalled = false;
+    // Fresh intent per attempt, EXCEPT anything carried over from an attempt
+    // that produced intent but no text. The corrective retry runs with tools
+    // disabled, so it cannot re-fire escalate_to_owner or mark_link_sent —
+    // dropping the intent there would notify nobody about a refund the client
+    // was already promised, or lose a link the model meant to send.
+    escalationArgs = carriedEscalationArgs;
+    linkSentToolCalled = carriedLinkIntent;
 
     // Collect tool intentions. Defer escalate_to_owner execution until AFTER send
     // so the LLM-generated reassurance text (e.g. "let me grab Sarah for you")
@@ -431,46 +439,22 @@ export async function generateResponse(
       });
     } catch (err) {
       if (err instanceof SanitizerEmptyOutputError) {
-        // Empty output with a real escalation intent is fine: the model emitted
-        // only the tool call. Substitute a canned reassurance line so the client
-        // doesn't see silence. (Gemini and other tool-tuned models do this.)
-        if (escalationArgs) {
-          const owner = salon.sourceOfTruth.salon_basics.owner_first_name;
-          const fallback = `let me grab ${owner} for you, she'll jump in as soon as she's between clients 🤍`;
-          sanitized = { messages: [fallback], modifications: ['escalation_fallback_text'] };
-          break outer;
-        }
-        // Empty output but the model signaled link intent (mark_link_sent)
-        // without pasting the URL — the confirmed 2026-07-10 failure: on
-        // booking messages ("i want to book") GPT-4o fires mark_link_sent and
-        // set_state_flag but writes no text, so the client got nothing and, in
-        // the old code, an escalation. Paste the link ourselves; the customer
-        // explicitly asked to book and we have booking.url.
-        if (linkSentToolCalled) {
-          const bookingUrl = salon.sourceOfTruth.booking.url;
-          const recentlySent = await eventsRepo.recentBookingLinkSent(
-            deps.db,
-            conversationId,
-            salon.config.booking_link_dedup_window_hours,
-          );
-          const linkMessage = recentlySent
-            ? `the booking link I sent has all the latest openings 🤍`
-            : `here you go 🤍 ${bookingUrl}`;
-          logger.warn(
-            { conversationId, recentlySent },
-            'llm signaled link intent with empty text; sending booking link fallback',
-          );
-          sanitized = { messages: [linkMessage], modifications: ['link_intent_no_text_fallback'] };
-          break outer;
-        }
-        // Empty output, no escalation or link intent. First try a CORRECTIVE
-        // retry: re-run the SAME generation but tell the model its last reply came
-        // through blank, so it actually writes text this time. This addresses the
-        // root cause — the model fired a tool (e.g. set_state_flag clearing the
-        // hesitant flag on "book me in") and forgot to verbalize — and handles ANY
-        // intent/phrasing naturally (booking, price, hesitance) with no keyword
-        // list. Pushed onto prompt.messages so the next attempt in this loop sees it.
+        // Empty output. ALWAYS try a CORRECTIVE retry first, whatever intent the
+        // model signalled: re-run the generation, tell it the last reply came
+        // through blank, and drop its tools so it cannot fire another
+        // tool-without-text. This addresses the root cause (a tool-happy model
+        // that forgets to verbalize) and handles ANY intent naturally.
+        //
+        // Doing this BEFORE the canned fallbacks is QA item 4.1: three different
+        // escalations (refund, medical, price contradiction) all shipped the
+        // identical hardcoded sentence, and 17% of one day's replies were canned.
+        // The fallbacks below are meant to be a rare backstop, not the voice —
+        // a refund deserves refund-shaped warmth written by the model.
         if (emptyAttempt < MAX_EMPTY_RETRIES) {
+          // Carry the intent: the retry has no tools, so it cannot re-signal an
+          // escalation the client was already promised or a link it meant to send.
+          carriedEscalationArgs = escalationArgs;
+          carriedLinkIntent = linkSentToolCalled;
           // Corrective retry. forceTextRetry drops native tools on the next attempt
           // so a tool-happy model cannot fire another tool-without-text and MUST
           // write a reply — far more reliable than prose alone. The nudge is worded
@@ -489,9 +473,46 @@ export async function generateResponse(
           logger.warn({ conversationId, emptyAttempt }, 'llm produced empty output; corrective retry (tools dropped, text forced)');
           continue outer;
         }
-        // The corrective retry ALSO came back empty (rare). Last-resort net for B4:
-        // if the client clearly asked to book, send the link rather than hand a
-        // converting client to a 4h handoff. Anchored keywords are a COARSE net
+        // Everything below is the double-empty case: the model produced no text
+        // even with the nudge and its tools taken away. Now, and only now, do the
+        // canned lines fire.
+        //
+        // Escalation intent first — the client was promised the owner, so the
+        // handoff must go out with its ORIGINAL reason (refund, medical, ...),
+        // not be relabelled as a generic empty-output failure.
+        if (escalationArgs) {
+          const owner = salon.sourceOfTruth.salon_basics.owner_first_name;
+          const fallback = `let me grab ${owner} for you, she'll jump in as soon as she's between clients 🤍`;
+          logger.warn(
+            { conversationId, reason: escalationArgs.reason },
+            'escalation intent with no text after corrective retry; sending canned reassurance',
+          );
+          sanitized = { messages: [fallback], modifications: ['escalation_fallback_text'] };
+          break outer;
+        }
+        // Link intent without the URL — the confirmed 2026-07-10 failure: on
+        // booking messages GPT-4o fires mark_link_sent and set_state_flag but
+        // writes no text, so the client got nothing. Paste the link ourselves.
+        if (linkSentToolCalled) {
+          const bookingUrl = salon.sourceOfTruth.booking.url;
+          const recentlySent = await eventsRepo.recentBookingLinkSent(
+            deps.db,
+            conversationId,
+            salon.config.booking_link_dedup_window_hours,
+          );
+          const linkMessage = recentlySent
+            ? `the booking link I sent has all the latest openings 🤍`
+            : `here you go 🤍 ${bookingUrl}`;
+          logger.warn(
+            { conversationId, recentlySent },
+            'llm signaled link intent with empty text after corrective retry; sending booking link fallback',
+          );
+          sanitized = { messages: [linkMessage], modifications: ['link_intent_no_text_fallback'] };
+          break outer;
+        }
+        // Last-resort net for B4: if the client clearly asked to book, send the
+        // link rather than hand a converting client to a 4h handoff. Anchored
+        // keywords are a COARSE net
         // here by design — the corrective retry already covers the vast majority of
         // phrasings, so this only has to catch the common ready-to-book lines in the
         // rare double-empty case. Reads only the client message, never a tool call.

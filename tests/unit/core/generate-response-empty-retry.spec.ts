@@ -233,12 +233,48 @@ describe('generateResponse — empty-output retry', () => {
 
     await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
 
-    expect(llm.calls).toHaveLength(1); // no retry: link intent is clear
+    // The corrective retry runs first now; both attempts are empty here, so the
+    // canned link fallback is the backstop that still saves the turn.
+    expect(llm.calls).toHaveLength(2);
     const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toContain('https://lumenhairstudio.glossgenius.com/book');
     expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
     // dedup window starts
+    expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'booking_link_sent', {});
+  });
+
+  // QA 4.2: the "hesitant first-timer lost all empathy" regression was never a
+  // prompt regression — it was this canned line firing because the model wrote
+  // no text. With the corrective retry the model's own words go out instead.
+  it('link intent + empty text: the corrective retry writes a real reply, and the link intent is NOT lost', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(
+      makeCtx('i want to go blonde but my hair is really dark and im scared of damage'),
+    );
+    const llm = new FakeLlmClient();
+    let n = 0;
+    llm.stage({
+      match: () => n++ === 0,
+      output: { text: '', toolCalls: [{ name: 'mark_link_sent', arguments: {} }] },
+    });
+    llm.stage({
+      match: () => true,
+      output: {
+        text: 'totally get that 🤍 going lighter safely starts with a free consult so renata can map out a plan: https://lumenhairstudio.glossgenius.com/book',
+        toolCalls: [],
+      },
+    });
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect(llm.calls).toHaveLength(2);
+    expect(llm.calls[1].tools).toEqual([]); // tools dropped to force text
+    const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('totally get that'); // empathy, not the canned line
+    expect(sent[0]).not.toContain('here you go 🤍 https'); // NOT the canned fallback
+    // The link intent from attempt 0 survived the tool-less retry.
     expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'booking_link_sent', {});
   });
 
@@ -258,7 +294,36 @@ describe('generateResponse — empty-output retry', () => {
     expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
   });
 
-  it('empty text WITH a real escalate_to_owner tool does NOT retry — canned reassurance + escalation on the first attempt', async () => {
+  // QA 4.1: escalating with empty text had become the habit, so three different
+  // situations (refund, medical, price contradiction) all shipped the SAME
+  // hardcoded sentence. The corrective retry now gets the model to write its own
+  // contextual line, while the escalation it already signalled is preserved.
+  it('escalation intent + empty text: the retry writes a CONTEXTUAL line and the original reason still escalates', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('i want a refund'));
+    const llm = new FakeLlmClient();
+    let n = 0;
+    llm.stage({
+      match: () => n++ === 0,
+      output: { text: '', toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'refund_request' } }] },
+    });
+    llm.stage({
+      match: () => true,
+      output: { text: "i'm so sorry about that 🤍 renata handles refunds personally, she'll come back to you today", toolCalls: [] },
+    });
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect(llm.calls).toHaveLength(2);
+    const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('so sorry about that'); // refund-shaped warmth
+    expect(sent[0]).not.toContain("she'll jump in as soon as"); // NOT the canned line
+    // The escalation the model signalled on attempt 0 survived the tool-less retry.
+    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'refund_request', null);
+  });
+
+  it('escalation intent + empty on BOTH attempts falls back to the canned line, keeping the ORIGINAL reason', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('i want a refund'));
     const llm = new FakeLlmClient();
     llm.stage({
@@ -269,9 +334,10 @@ describe('generateResponse — empty-output retry', () => {
 
     await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
 
-    expect(llm.calls).toHaveLength(1); // no empty-retry: escalation intent short-circuits it
+    expect(llm.calls).toHaveLength(2);
     const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
     expect(sent[0]).toContain('let me grab Renata');
+    // Crucially NOT relabelled as sanitizer_empty_output.
     expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'refund_request', null);
   });
 
