@@ -46,16 +46,21 @@ export async function sanitize(raw: string, ctx: SanitizeContext): Promise<Sanit
     .trim();
   if (text !== beforeScrub) mods.push('forbidden_chars_scrubbed');
 
-  // 4. Restore URLs (clean versions).
-  for (let i = 0; i < links.length; i++) {
-    text = text.replace(placeholder(i), links[i]);
-  }
+  // 4. URLs stay MASKED from here until after the split. A domain's dots look
+  //    exactly like sentence boundaries to the splitter, which then rejoins the
+  //    pieces with spaces — that is how "lumenhairstudio.glossgenius.com/book"
+  //    reached a client as "lumenhairstudio. glossgenius. com/book", a dead link
+  //    (production 2026-07-15). A placeholder has no dots and no spaces, so it
+  //    survives both the split and the word count as a single token.
 
-  // 5. Link cap (exact URL equality for booking link).
+  // 5. Link cap (exact URL equality for booking link), applied to placeholders.
   if (links.length > 1) {
-    const keep = links.find((l) => l === ctx.bookingLink) ?? links[0];
-    for (const link of links) {
-      if (link !== keep) text = text.replace(link, '');
+    const keepIndex = Math.max(
+      0,
+      links.findIndex((l) => l === ctx.bookingLink),
+    );
+    for (let i = 0; i < links.length; i++) {
+      if (i !== keepIndex) text = text.replace(placeholder(i), '');
     }
     text = text.replace(/\s+/g, ' ').trim();
     mods.push('extra_links_stripped');
@@ -91,6 +96,15 @@ export async function sanitize(raw: string, ctx: SanitizeContext): Promise<Sanit
     messages = splitOnSentenceBoundaries(text, ctx.policy.maxWordsPerMessage, 2);
     mods.push('split_into_multiple');
   }
+
+  // 8b. Restore URLs, now that the splitter can no longer break them apart.
+  messages = messages.map((m) => {
+    let restored = m;
+    for (let i = 0; i < links.length; i++) {
+      restored = restored.replace(placeholder(i), links[i]);
+    }
+    return restored;
+  });
 
   // 9. Empty check.
   messages = messages.map((m) => m.trim()).filter(Boolean);

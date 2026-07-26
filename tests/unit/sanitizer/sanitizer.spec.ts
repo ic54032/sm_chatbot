@@ -130,3 +130,61 @@ describe('sanitizer — bug regressions', () => {
     expect(result.messages[0]).not.toContain(',jsessionid');
   });
 });
+
+// Three defects found by reading production output on 2026-07-26. None of them
+// were visible to the existing suite because no test sent a long reply that
+// also contained a link.
+describe('sanitizer — split must never damage the reply', () => {
+  const longCtx = { bookingLink: 'https://lumenhairstudio.glossgenius.com/book', policy: { maxWordsPerMessage: 40, maxEmojis: 2 } };
+
+  it('keeps a URL intact when the reply is long enough to split (production 2026-07-15)', async () => {
+    // The splitter used to read the dots in a domain as sentence boundaries and
+    // rejoin the pieces with spaces, shipping a dead link to the client.
+    const raw =
+      'balayage at our studio runs between $220 and $320 depending on your length and density, ' +
+      'and that includes the toner so there are no surprises at the end of the appointment. ' +
+      'the very best first step is a quick consult so renata can look at your hair in person ' +
+      'and map out a plan that keeps it healthy, you can grab a time right here: ' +
+      'https://lumenhairstudio.glossgenius.com/book';
+
+    const result = await sanitize(raw, longCtx);
+
+    expect(result.modifications).toContain('split_into_multiple');
+    const joined = result.messages.join(' ');
+    expect(joined).toContain('https://lumenhairstudio.glossgenius.com/book');
+    expect(joined).not.toContain('glossgenius. com');
+    expect(joined).not.toContain('lumenhairstudio. ');
+  });
+
+  it('loses no words when the reply needs more bubbles than the cap allows (production 2026-07-21)', async () => {
+    // 104 words used to become 2 x 40 with ~24 words silently discarded.
+    const raw = Array.from({ length: 104 }, (_, i) => `word${i}`).join(' ') + '.';
+
+    const result = await sanitize(raw, longCtx);
+
+    expect(result.messages.length).toBeLessThanOrEqual(2); // bubble count still bounded
+    const joined = result.messages.join(' ');
+    for (const marker of ['word0', 'word50', 'word79', 'word103']) {
+      expect(joined).toContain(marker);
+    }
+  });
+
+  it('never truncates a single sentence that exceeds the word cap', async () => {
+    const raw = Array.from({ length: 55 }, (_, i) => `w${i}`).join(' '); // one sentence, no terminator
+
+    const result = await sanitize(raw, longCtx);
+
+    expect(result.messages.join(' ')).toContain('w54'); // the tail survives
+  });
+
+  it('still splits a normal two-sentence reply at the sentence boundary', async () => {
+    const raw =
+      'balayage runs between $220 and $320 depending on your length and density, toner included so there are no surprises. ' +
+      'the best first step is a quick consult with renata so she can map out a plan that keeps your hair healthy.';
+
+    const result = await sanitize(raw, longCtx);
+
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]).toMatch(/[.!?]$/); // clean break, not mid-thought
+  });
+});
