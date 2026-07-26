@@ -415,6 +415,34 @@ Not prompt items, tracked separately: 4.6 (message splitting is our sanitizer's 
 product decision) and the improvised hyphen in 4.7 (our sanitizer rewrites an em dash to "-", which
 is what produced "availability-just").
 
+## 4l. Round 2 backend items 3.1, 3.2 and the improvised hyphen
+
+- **3.1 — human-readable notification labels.** The reason code written to the GHL
+  `last_escalation_reason` custom field is now translated for the owner: `refund_request` reads
+  "Refund request", `sanitizer_empty_output` reads "Bot couldn't answer, jumping to you",
+  `llm_failed` reads "Technical issue, bot paused". The full mapping from the QA table is
+  implemented, plus labels for the reasons the table did not cover (image_without_url,
+  attachment_fetch_failed, implied_handoff_no_tool_call, internal_vocab_leak). An unmapped reason
+  degrades to a readable sentence rather than leaking snake_case. The RAW code still goes to
+  `escalations.reason` and the `escalated_to_owner` event, so analytics and debugging are unaffected.
+  A test asserts no label contains our internal vocabulary. **The notification TEMPLATE itself is
+  still Croatian and lives in the GHL workflow — that half is on the owner's side.**
+- **3.2 — voice notes misclassified as video.** Root cause found: Instagram voice notes arrive from
+  GHL as `.mp4`, identical in the URL to a real video, so our extension heuristic labelled them
+  `video_attachment` and the owner was told to go watch a video. The attachment type is now refined
+  with a HEAD request that reads `Content-Type` (`audio/mp4` vs `video/mp4`). Only genuinely
+  ambiguous extensions (`.mp4`, `.m4a`) are probed, so a photo or a `.mov` costs no extra request,
+  and every failure mode (timeout, 401, missing header) keeps the original guess — the probe can
+  only improve the classification, never break it.
+- **4.7 improvised hyphen.** "live availability-just grab a spot" was ours, not the model's: the
+  sanitizer rewrote an em dash to a bare hyphen, which glued the words either side together and
+  read as exactly the improvised dash the style rules ban. Em and en dashes now become a comma with
+  the surrounding spaces absorbed, so it reads "live availability, just grab a spot".
+
+Still open and needing a product decision: **4.6 (one turn, one message)**. The two-bubble replies
+are our sanitizer splitting at `max_words_per_message`, currently 40. Options are to raise the cap
+(~60, so splitting becomes rare), to disable splitting entirely, or to keep it as is.
+
 ## 5. Bonus finding for the GHL side
 
 The client's text bubble **"Do you do this type of hair?"** (sent alongside a shared IG post,

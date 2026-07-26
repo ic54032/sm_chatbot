@@ -6,6 +6,7 @@ import * as conversationsRepo from '../db/repos/conversations.js';
 import * as eventsRepo from '../db/repos/events.js';
 import * as salonsRepo from '../db/repos/salons.js';
 import { GhlApiError } from '../ghl/errors.js';
+import { escalationLabel } from './escalation-labels.js';
 import { logger } from '../lib/logger.js';
 
 export interface EscalateInput {
@@ -41,7 +42,9 @@ export async function escalateToOwner(input: EscalateInput): Promise<void> {
     await input.ghl.updateCustomField({
       contactId: input.conversation.ghlContactId,
       fieldId: input.salon.config.ghl_custom_field_ids.last_escalation_reason,
-      value: input.reason,
+      // The owner reads this field in a notification, so it carries the human
+      // label. The raw code stays in escalations.reason and the event payload.
+      value: escalationLabel(input.reason),
     });
   } catch (err) {
     if (err instanceof GhlApiError && (err.status === 401 || err.status === 403)) {

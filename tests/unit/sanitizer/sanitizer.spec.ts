@@ -7,15 +7,25 @@ const baseCtx = {
 };
 
 describe('sanitizer — forbidden chars', () => {
-  it('replaces em-dash with hyphen', async () => {
+  it('replaces em-dash with a comma, absorbing the spaces around it', async () => {
     const result = await sanitize('Hi there — how are you?', baseCtx);
     expect(result.messages[0]).not.toContain('—');
+    expect(result.messages[0]).toBe('Hi there, how are you?');
     expect(result.modifications).toContain('forbidden_chars_scrubbed');
   });
 
-  it('replaces en-dash with hyphen', async () => {
+  // QA Round 2, item 4.7: a bare hyphen glued the words either side together and
+  // read as an improvised dash, which the style rules ban.
+  it('does not produce a word-gluing hyphen (the "availability-just" bug)', async () => {
+    const result = await sanitize('live availability—just grab a spot', baseCtx);
+    expect(result.messages[0]).toBe('live availability, just grab a spot');
+    expect(result.messages[0]).not.toContain('-');
+  });
+
+  it('replaces en-dash with a comma', async () => {
     const result = await sanitize('Open 9–5 today', baseCtx);
     expect(result.messages[0]).not.toContain('–');
+    expect(result.messages[0]).toBe('Open 9, 5 today');
     expect(result.modifications).toContain('forbidden_chars_scrubbed');
   });
 

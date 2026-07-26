@@ -35,7 +35,11 @@ export async function sanitize(raw: string, ctx: SanitizeContext): Promise<Sanit
   // 3. Forbidden char scrub.
   const beforeScrub = text;
   text = text
-    .replace(/[—–]/g, '-')
+    // An em/en dash used to become a bare hyphen, which glued the words either
+    // side together: "live availability—just grab a spot" read as
+    // "availability-just" (QA Round 2, item 4.7). A comma preserves the pause
+    // and the spacing. Surrounding whitespace is absorbed so we never emit " , ".
+    .replace(/\s*[—–]\s*/g, ', ')
     .replace(/[…]/g, '')
     .replace(/;/g, ',')
     .replace(/\s+/g, ' ')

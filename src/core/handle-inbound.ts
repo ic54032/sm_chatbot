@@ -9,6 +9,7 @@ import type { RespondJobData } from '../queue/index.js';
 import { logger } from '../lib/logger.js';
 import { escalateToOwner } from './escalate.js';
 import { parseWebhookAttachments } from '../images/parse-webhook-attachments.js';
+import { refineMediaTypes } from '../images/refine-media-type.js';
 
 export interface HandleInboundInput {
   locationId: string;
@@ -55,10 +56,14 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
     : { text: '', attachments: [] as Array<{ url: string | null; type: 'image' | 'audio' | 'video' }> };
   // Trim to drop whitespace-only inbounds (e.g., accidental empty IG send).
   const textContent = (input.messageText ?? fetched.text ?? '').trim();
-  const attachments =
+  const rawAttachments =
     webhookAttachments.length > 0
       ? webhookAttachments
       : (fetched.attachments ?? []);
+  // A voice note and a video are both ".mp4" in the URL, so the extension alone
+  // mislabels voice notes as video. Ask the server when it is ambiguous.
+  // Attachments without a URL pass through untouched (escalated separately).
+  const attachments = await refineMediaTypes(rawAttachments);
 
   // DIAGNOSTIC: dump full inbound shape so we can see what GHL actually sends.
   // Includes raw payload VALUES (not just keys) so we can spot which merge tags
