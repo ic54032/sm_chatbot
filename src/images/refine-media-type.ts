@@ -13,17 +13,41 @@ interface MediaAttachment {
  * Instagram voice notes arrive from GHL as `.mp4` files, identical in the URL to
  * a real video, so the extension heuristic labels them `video` and the owner is
  * told "client sent a video" when they actually got a voice note (QA Round 2,
- * item 3.2). The server knows the difference, so ask it: a HEAD request returns
- * `audio/mp4` for a voice note and `video/mp4` for a video.
+ * item 3.2).
  *
- * Only genuinely ambiguous attachments are probed — a `.mov` or a `.jpeg` needs
- * no network call. Every failure mode (timeout, 401, no header, junk value)
- * leaves the original type untouched, so this can only ever improve the guess.
+ * Content-Type does NOT settle it: GHL serves both as `video/mp4` (verified
+ * against production assets 2026-07-26). The container does. Reading the first
+ * few KB of an MP4 shows either a video track or an audio-only one:
+ *
+ *   video      ftyp brands "isom iso2 avc1 mp41", handler `vide`   (619 KB)
+ *   voice note ftyp brands "isom iso2 mp41",      handler `soun`   (12 KB)
+ *
+ * `avc1`/`hvc1` are video codec brands and `vide`/`soun` are the track handler
+ * types inside `moov`, so either one identifies the file. Only genuinely
+ * ambiguous extensions are probed, and every failure mode (no range support,
+ * timeout, 401, truncated header) leaves the original type untouched — the probe
+ * can only improve the guess, never break it.
  */
 const AMBIGUOUS_EXT = /\.(mp4|m4a)(?:\?|#|$)/i;
-const HEAD_TIMEOUT_MS = 4000;
+const PROBE_TIMEOUT_MS = 5000;
+const PROBE_BYTES = 4095;
 
 type Fetcher = typeof fetch;
+
+/** 'video' | 'audio' | null (undecidable from the bytes we read). */
+function classifyContainer(head: Buffer): 'video' | 'audio' | null {
+  const ascii = head.toString('latin1');
+  // Track handlers are the strongest signal when moov sits near the front.
+  if (ascii.includes('vide')) return 'video';
+  if (ascii.includes('soun')) return 'audio';
+  // Fall back to the ftyp compatible-brand list: a video codec brand means video.
+  const ftyp = ascii.indexOf('ftyp');
+  if (ftyp >= 0) {
+    const brands = ascii.slice(ftyp, ftyp + 40);
+    if (/avc1|hvc1|hev1|av01/.test(brands)) return 'video';
+  }
+  return null;
+}
 
 export async function refineMediaTypes<T extends MediaAttachment>(
   attachments: T[],
@@ -38,20 +62,19 @@ export async function refineMediaTypes<T extends MediaAttachment>(
       if (!ambiguous(att)) return att;
       try {
         const res = await fetcher(att.url, {
-          method: 'HEAD',
-          signal: AbortSignal.timeout(HEAD_TIMEOUT_MS),
+          headers: { Range: `bytes=0-${PROBE_BYTES}` },
+          signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
         });
-        const contentType = res.headers.get('content-type')?.toLowerCase() ?? '';
-        if (contentType.startsWith('audio/')) {
-          if (att.type !== 'audio') {
-            logger.info({ url: att.url, contentType, was: att.type }, 'media type refined to audio via Content-Type');
-          }
-          return { ...att, type: 'audio' as const };
+        if (!res.ok) return att;
+        const head = Buffer.from(await res.arrayBuffer());
+        const verdict = classifyContainer(head);
+        if (!verdict) return att;
+        if (verdict !== att.type) {
+          logger.info({ url: att.url, was: att.type, now: verdict }, 'media type refined from container bytes');
         }
-        if (contentType.startsWith('video/')) return { ...att, type: 'video' as const };
-        return att;
+        return { ...att, type: verdict };
       } catch (err) {
-        // The probe is best-effort: keep whatever the extension suggested.
+        // Best-effort: keep whatever the extension suggested.
         logger.debug({ err, url: att.url }, 'media type probe failed; keeping inferred type');
         return att;
       }

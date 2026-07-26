@@ -418,7 +418,7 @@ export async function generateResponse(
     // escalate_to_owner, force the escalation anyway. The customer was already
     // promised the owner is coming — failing to follow through breaks trust and
     // leaves the conversation silently un-handed-off.
-    if (!escalationArgs && containsHandoffPromise(cleanedText)) {
+    if (!escalationArgs && containsHandoffPromise(cleanedText, salon.sourceOfTruth.salon_basics.owner_first_name)) {
       logger.warn(
         { conversationId, textPreview: cleanedText.slice(0, 200) },
         'bot promised handoff in reply but did not call escalate_to_owner; forcing escalation',
