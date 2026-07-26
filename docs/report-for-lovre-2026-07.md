@@ -383,6 +383,38 @@ Result: a refund gets refund-shaped warmth, a medical question gets its own, and
 first-timer gets empathy plus consult framing — all written by the model, with the canned lines back
 to being the rare backstop they were meant to be. No prompt or Layer 1 change is needed for 4.1/4.2.
 
+## 4k. Round 2 prompt fixes (for Layer 1 backport)
+
+Applied to the deployed master-prompt.md. Items 4.1, 4.2 and 4.9 are NOT here — 4.1/4.2 turned out
+to be the backend bug in 4j, and 4.9 was never exercised because of the outage.
+
+- **4.3 — video admission (Section 8).** The rule existed but only half of it was being followed, so
+  the ban is now explicit and has a BAD example: never state, imply, or apologize for not having
+  received, seen, watched, heard, or been able to open anything, not even softened with "but". Go
+  straight to the redirect with no preamble about what did or did not arrive.
+- **4.4 — menu dump (Section 3).** New rule: on a broad "what do you offer", name two or three
+  categories at most in your own words and hand back one question. Never list the inventory — it
+  reads like a brochure and buries what the client actually wants.
+- **4.5 — fabricated people, past, and payment (Section 3).** The existing "never state a policy
+  that is not in the knowledge base" rule now explicitly covers three areas where invented answers
+  sound most convincing. Never say anything in either direction about a person who is not in
+  stylist_directory (the bot told a client "petra isn't here anymore", confirming employment history
+  for someone who never existed); never assert any past fact not in the knowledge base; never extend
+  a payment fact beyond what is written (it claimed "card or cash accepted" — the SOT says only that
+  a card on file is required, and the word "cash" appears nowhere in it). BAD/GOOD example included.
+- **4.7a — openers and repetition (Section 4).** "Hi there" and "Hello there" joined "Hey there" on
+  the forbidden list, plus a new "Never reuse your own phrasing" rule: never repeat a sentence
+  already sent in the conversation and never open two consecutive replies the same way, with the
+  booking-page description called out by name (it appeared near-verbatim in two consecutive replies).
+- **4.8 — capitalization (Section 1).** The lowercase rule was soft ("default to lowercase") and the
+  model drifted back to sentence case. Now: start EVERY sentence lowercase, including the first word
+  of every message, with only proper nouns, prices, and "I" capitalized, plus worked right/wrong
+  examples.
+
+Not prompt items, tracked separately: 4.6 (message splitting is our sanitizer's word cap, pending a
+product decision) and the improvised hyphen in 4.7 (our sanitizer rewrites an em dash to "-", which
+is what produced "availability-just").
+
 ## 5. Bonus finding for the GHL side
 
 The client's text bubble **"Do you do this type of hair?"** (sent alongside a shared IG post,

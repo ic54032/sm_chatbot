@@ -47,11 +47,34 @@ describe('loadMasterPrompt', () => {
     expect(prompt).toContain('Never restate the question'); // 1.9 voice
   });
 
+  it('contains the QA Round 2 behavior fixes', () => {
+    const prompt = loadMasterPrompt();
+    expect(prompt).toContain('Never dump the menu'); // 4.4
+    expect(prompt).toContain('The same rule covers PEOPLE, the PAST, and PAYMENT'); // 4.5 (Petra + "cash")
+    expect(prompt).toContain('Never reuse your own phrasing'); // 4.7a
+    expect(prompt).toContain('Hi there,'); // 4.7a banned opener family
+    expect(prompt).toContain('Start EVERY sentence lowercase'); // 4.8
+    expect(prompt).toContain('The redirect is only half the rule'); // 4.3 video admission
+    // The three media markers the backend can now inject (Section 8).
+    expect(prompt).toContain('[client sent a video]');
+    expect(prompt).toContain('[client sent a voice note]');
+    expect(prompt).toContain('[client sent an attachment that did not come through]');
+  });
+
   it('the prompt obeys its own style rules (no banned phrases inside bot example lines)', () => {
     const prompt = loadMasterPrompt();
     // "happy to help" / "flag her" appeared in example replies and now conflict
     // with the strengthened rules — must only survive in the ban list / a BAD example.
-    const youLines = prompt.split('\n').filter((l) => /You:\s*"/.test(l));
+    // BAD blocks are demonstrations of what NOT to do, so they are exempt: scan
+    // only the "You:" lines that sit under a GOOD heading (or under none).
+    const youLines: string[] = [];
+    let inBadBlock = false;
+    for (const line of prompt.split('\n')) {
+      if (/^BAD\b/i.test(line)) inBadBlock = true;
+      else if (/^GOOD\b/i.test(line)) inBadBlock = false;
+      if (!inBadBlock && /You:\s*"/.test(line)) youLines.push(line);
+    }
+    expect(youLines.length).toBeGreaterThan(5); // guard against the filter silently matching nothing
     for (const line of youLines) {
       expect(line).not.toMatch(/happy to help/i);
       expect(line).not.toMatch(/\bflag (her|him|the owner|this)\b/i);
