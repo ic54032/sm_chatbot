@@ -2,7 +2,7 @@
 
 To: Lovre
 From: backend (Ivan)
-Date: July 2026 (updated through July 16)
+Date: July 2026 (updated through July 26)
 
 ## 1. Correcting the incident diagnosis (Bible, Sections 2.7 and 0)
 
@@ -429,11 +429,8 @@ is what produced "availability-just").
   still Croatian and lives in the GHL workflow — that half is on the owner's side.**
 - **3.2 — voice notes misclassified as video.** Root cause found: Instagram voice notes arrive from
   GHL as `.mp4`, identical in the URL to a real video, so our extension heuristic labelled them
-  `video_attachment` and the owner was told to go watch a video. The attachment type is now refined
-  with a HEAD request that reads `Content-Type` (`audio/mp4` vs `video/mp4`). Only genuinely
-  ambiguous extensions (`.mp4`, `.m4a`) are probed, so a photo or a `.mov` costs no extra request,
-  and every failure mode (timeout, 401, missing header) keeps the original guess — the probe can
-  only improve the classification, never break it.
+  `video_attachment` and the owner was told to go watch a video. *(The first fix attempted here read
+  `Content-Type` and did not work — see 4m; the working fix inspects the container.)*
 - **4.7 improvised hyphen.** "live availability-just grab a spot" was ours, not the model's: the
   sanitizer rewrote an em dash to a bare hyphen, which glued the words either side together and
   read as exactly the improvised dash the style rules ban. Em and en dashes now become a comma with
@@ -442,6 +439,87 @@ is what produced "availability-just").
 Still open and needing a product decision: **4.6 (one turn, one message)**. The two-bubble replies
 are our sanitizer splitting at `max_words_per_message`, currently 40. Options are to raise the cap
 (~60, so splitting becomes rare), to disable splitting entirely, or to keep it as is.
+
+## 4m. Retest findings — one of them worse than what was reported
+
+Re-running your Section 3 and 4 tests against the deployed fixes produced two failures and, in the
+same transcript, a third problem nobody had reported.
+
+**Confirmed working first:** item 4.1 is genuinely fixed. Three escalations in one session produced
+three *different* lines written by the model — "oh no, let me get renata on this for you right away"
+(refund), "that's one for renata herself, let me get her on this for you" (health), "sure thing, i'll
+get renata to handle this for you" (owner request). Previously all three shipped the identical
+hardcoded sentence.
+
+### The serious one: a promised handoff with no escalation
+
+A client asked to speak to the owner. The bot replied *"sure thing! i'll get renata to handle this for
+you 🤍"* and **no escalation fired at all** — the client was promised a human and the owner was never
+told. This is the June failure mode returning through a new door, and both causes were ours:
+
+1. The handoff-promise detector knew the "let NAME handle this" family but not "get/ask/have NAME **to**
+   handle this".
+2. **Our own item 4.8 caused the rest.** Locking the reply voice to all-lowercase made the model write
+   "i'll" and "renata", while the detector's name patterns required `[A-Z][a-z]+` and a capital I.
+   Several patterns went silent the moment the style rule shipped.
+
+The second cause is the one worth remembering: **a prose change in the prompt disarmed a safety net in
+the backend**, and it only surfaced when a real client went unescalated. The fix stops guessing at
+names — the detector now matches the salon's actual `owner_first_name` from the SOT, spelled
+case-insensitively so the rest of each pattern can stay case-sensitive. Straight and typographic
+apostrophes are both accepted. The "one for NAME" pattern deliberately refuses a pronoun, because
+"this is for her" is ordinary product talk and a false positive costs a needless four-hour pause.
+
+### Voice notes: the first fix could not have worked
+
+`Content-Type` does not distinguish them. GHL serves a voice note and a video **both** as
+`video/mp4` — verified directly against the production assets. The container does distinguish them:
+
+| | Video | Voice note |
+|---|---|---|
+| ftyp brands | `isom iso2 **avc1** mp41` | `isom iso2 mp41` |
+| Track handler | `vide` | `soun` |
+| Size | 619 KB | 12.7 KB |
+
+`avc1` is an H.264 codec brand. The probe now reads the first 4 KB with a Range request and
+classifies on that, falling back to the ftyp brand list when `moov` sits out of range. Any failure
+still keeps the inferred type.
+
+### Health question: escalates correctly, categorised generically
+
+The health question produced a warm contextual line and a real escalation, but under
+`implied_handoff_no_tool_call` rather than `medical_question`, because the model wrote the handoff
+language without firing the tool and the safety net caught it. Functionally right, semantically
+vague. This is chronic gpt-4o tool-call unreliability and is the strongest argument for the structural
+change we are considering separately: returning the reply and its intent as one structured object, so
+they cannot diverge.
+
+## 4n. Three defects in the reply splitter — including dead booking links
+
+Item 4.6 arrived as a style note ("one turn, one message"). Reading the splitter against stored
+production output showed the style point was the least of it. All three defects below were live, and
+all 419 tests were green throughout, because no test sent a long reply that also contained a link.
+
+**Dead booking links.** The splitter finds sentence boundaries with `/[^.!?]+[.!?]+/` and rejoins the
+pieces with a space. A domain is full of dots, so it read
+`lumenhairstudio.glossgenius.com/book` as three sentences and shipped
+`lumenhairstudio. glossgenius. com/book` — a link the client cannot click. **Confirmed twice on
+2026-07-15.** The sanitizer already masked URLs behind placeholders for the character scrub, but
+restored them *before* the split; they now stay masked through it.
+
+**Silently discarded text.** A trailing `.slice(0, maxMessages)` threw away everything past the bubble
+cap. A 104-word reply on 2026-07-21 lost roughly 24 words — and anything sitting at the end, the
+booking link included, went with them. The final bubble now absorbs the remainder.
+
+**Mid-sentence truncation.** A single sentence longer than the word cap was cut with
+`slice(0, maxWords)` and its tail dropped. An oversized sentence now goes out whole; one long bubble
+beats half an answer.
+
+The word cap and bubble count are unchanged (40 words, 2 bubbles) — that part of 4.6 is a product
+decision and is still open. What is fixed is the damage.
+
+**Worth flagging for your own testing:** if you saw a reply where the booking link looked odd or a
+message seemed to stop mid-thought, this was why, and it was not the model.
 
 ## 5. Bonus finding for the GHL side
 
@@ -461,3 +539,35 @@ webhook arrives.
   which clears `handoff_until` so the bot resumes. Confirmed working.
 
 Both were GHL-workflow configuration, not backend code.
+
+## 7. What is still open before Round 2.5
+
+Everything in Round 2 that is backend work is done and deployed. Five things remain, and none of them
+are code we are still writing.
+
+**Waiting on the owner (GHL configuration)**
+
+1. **3.1, second half — the notification template is still Croatian.** The reason code inside it is
+   now a human English label, but the surrounding template ("treba tvoju pažnju", "Ukloni tag...")
+   lives in the GHL workflow and has to be rewritten there, and made per-install.
+2. **3.5 — notification targeting.** Only the owner user receives the push. That is the intended
+   shape, but it needs documenting where it is set so it is repeatable for the next salon.
+3. **3.4 — assigning the conversation.** Ready to implement as soon as we have the owner's GHL user
+   ID; the escalation currently tags the contact but leaves the conversation unassigned.
+
+**Decisions**
+
+4. **3.3 — the auto-resume window.** Auto-resume works (there are `auto_timeout` events in
+   production), but the window is **4 hours** and you suggested **12**, pending your sign-off. One
+   edge we found while checking: if `removeTag` fails during auto-resume the escalation is already
+   marked resolved, so the tag can be orphaned in GHL while the database believes it is closed.
+5. **4.6 — one turn, one message.** The three defects behind it are fixed (4n). What remains is the
+   knob: 40 words, at most 2 bubbles. Nothing currently argues those numbers are wrong, so they stay
+   until the retest gives a reason to move them.
+
+**Verification, not fixes**
+
+Item 4.9 (the real-person polarity fix) and all of Section 6 need a run. Two items from our own
+retest also need re-checking after the latest deploy: a voice note should now escalate as
+"Client sent a voice note, take a look", and "I would like to speak to renata" must produce an
+escalation, not just a warm sentence.
