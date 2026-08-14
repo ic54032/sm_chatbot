@@ -595,6 +595,13 @@ export async function generateResponse(
     if (vocabLeak) {
       if (emptyAttempt < MAX_EMPTY_RETRIES) {
         vocabLeakRetried = true;
+        // Same token discipline as the empty-output retry. Without this the
+        // regeneration re-sends every image, putting ~18k tokens back on the
+        // wire a second later and reproducing the 429 that the strip-images fix
+        // exists to prevent — only through this door instead.
+        carriedEscalationArgs = escalationArgs;
+        carriedLinkIntent = linkSentToolCalled;
+        forceTextRetry = true;
         logger.warn(
           { conversationId, matched: vocabLeak, textPreview: sanitized.messages.join(' ').slice(0, 300) },
           'internal-vocabulary leak in client reply; regenerating (1.9 tripwire)',

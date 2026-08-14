@@ -17,6 +17,18 @@ import type { BuildPromptOutput } from './build.js';
  * bogus `llm_failed` on a healthy conversation. Without the images the retry
  * costs about a tenth as much.
  */
+/**
+ * What replaces an image block on the retry.
+ *
+ * Wording matters more than it looks. An earlier version said "[photo already
+ * reviewed]", which asserts to a stateless model that it has seen something it
+ * has not — and Section 8 of the prompt tells it to name a concrete detail from
+ * the photo. That combination invites an invented description of a damage photo,
+ * which is the exact fabrication the media rules exist to prevent. State the
+ * absence and forbid the description instead.
+ */
+const PHOTO_OMITTED = '[the photo is not attached to this turn, do not describe it]';
+
 export function withoutImageBlocks(messages: BuildPromptOutput['messages']): BuildPromptOutput['messages'] {
   return messages.map((m) => {
     if (typeof m.content === 'string') return m;
@@ -31,7 +43,7 @@ export function withoutImageBlocks(messages: BuildPromptOutput['messages']): Bui
     // The marker keeps the turn meaningful — "what do you think?" two messages
     // later still has something to refer back to — and guarantees we never emit
     // an empty content string, which the APIs reject.
-    const content = [text, hadImage ? '[photo already reviewed]' : ''].filter(Boolean).join(' ');
-    return { ...m, content: content || '[photo already reviewed]' };
+    const content = [text, hadImage ? PHOTO_OMITTED : ''].filter(Boolean).join(' ');
+    return { ...m, content: content || PHOTO_OMITTED };
   });
 }

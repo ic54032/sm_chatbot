@@ -12,9 +12,17 @@
  * name, and they leave "I" alone. Anything they are unsure about, they leave.
  */
 
-/** Openers banned by the prompt that kept coming back anyway. */
+/**
+ * Openers banned by the prompt that kept coming back anyway.
+ *
+ * The lookahead is load-bearing. These words are also ordinary adjectives, so
+ * matching on a word boundary alone amputated the subject of real sentences:
+ * "Perfect for fine hair, this gloss is $65" shipped as "for fine hair...".
+ * A banned opener is a standalone interjection — it must be followed by
+ * terminal punctuation or nothing at all.
+ */
 const BANNED_OPENERS =
-  /^(absolutely|certainly|of course|indeed|perfect|amazing|wonderful|fantastic|great|sure thing|thanks for reaching out|hi there|hey there|hello there)\b[,!.\s]*/i;
+  /^(absolutely|certainly|of course|indeed|perfect|amazing|wonderful|fantastic|great|sure thing|thanks for reaching out|hi there|hey there|hello there)(?=\s*[,!.]|\s*$)[,!.\s]*/i;
 
 /** Words that legitimately keep their capital at the start of a sentence. */
 const ALWAYS_CAPITAL = new Set(['i']);
@@ -67,6 +75,16 @@ export function stripBannedOpener(text: string): string {
  */
 export function applyStyleRules(text: string, ctx: StyleContext): { text: string; changed: boolean } {
   const afterOpener = stripBannedOpener(text);
-  const afterCase = enforceLowercaseSentences(afterOpener, ctx);
+
+  // A style pass must never be able to empty a reply. "Perfect!" is exactly the
+  // one-word acknowledgement this rule targets, and stripping it to nothing
+  // would raise SanitizerEmptyOutputError — costing an extra LLM call and, if
+  // that also came back thin, a canned line plus a 12-hour pause on a turn the
+  // model had actually answered. When nothing of substance survives, keep the
+  // original and let the prompt own it.
+  const hasSubstance = /\p{L}|\p{N}/u.test(afterOpener);
+  const base = hasSubstance ? afterOpener : text;
+
+  const afterCase = enforceLowercaseSentences(base, ctx);
   return { text: afterCase, changed: afterCase !== text };
 }

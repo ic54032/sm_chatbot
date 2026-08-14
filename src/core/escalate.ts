@@ -47,8 +47,20 @@ export async function escalateToOwner(input: EscalateInput): Promise<void> {
     });
   });
 
+  // `escalation_active` means exactly one thing: the bot is paused. A notify-only
+  // alert must NOT set it, for a reason that only shows up two turns later — the
+  // owner's notification workflow triggers on "tag added", and a tag that is
+  // already present cannot be added again. A media alert that left the tag stuck
+  // would silently swallow the notification for the NEXT real escalation, so a
+  // refund or a medical question would pause the bot for 12 hours with nobody
+  // told. Notify-only carries its own tag instead.
+  const tag = pauseBot ? 'escalation_active' : 'owner_fyi';
+
   try {
-    await input.ghl.addTag(input.conversation.ghlContactId, ['escalation_active']);
+    // Remove first so the add always registers as a transition, even if a
+    // previous cycle left the tag behind. GHL fires its workflow on the add.
+    await input.ghl.removeTag(input.conversation.ghlContactId, [tag]).catch(() => undefined);
+    await input.ghl.addTag(input.conversation.ghlContactId, [tag]);
   } catch (err) {
     if (err instanceof GhlApiError && (err.status === 401 || err.status === 403)) {
       logger.error({ err, salonId: input.salon.id }, 'GHL auth failed during addTag; disabling salon');

@@ -7,6 +7,11 @@
 import { describe, it, expect } from 'vitest';
 import { withoutImageBlocks } from '../../../src/prompt/strip-images.js';
 
+// The marker states the ABSENCE of the photo and forbids describing it. An
+// earlier wording ("[photo already reviewed]") asserted the model had seen
+// something it never received, which invited an invented photo description.
+const MARKER = '[the photo is not attached to this turn, do not describe it]';
+
 const img = { type: 'image' as const, mediaType: 'image/jpeg', base64: 'AAAA' };
 
 describe('withoutImageBlocks', () => {
@@ -14,12 +19,12 @@ describe('withoutImageBlocks', () => {
     const out = withoutImageBlocks([
       { role: 'user', content: [img, { type: 'text', text: 'can you fix this?' }] },
     ]);
-    expect(out[0].content).toBe('can you fix this? [photo already reviewed]');
+    expect(out[0].content).toBe(`can you fix this? ${MARKER}`);
   });
 
   it('never emits empty content for an image-only turn (the APIs reject it)', () => {
     const out = withoutImageBlocks([{ role: 'user', content: [img] }]);
-    expect(out[0].content).toBe('[photo already reviewed]');
+    expect(out[0].content).toBe(MARKER);
   });
 
   it('leaves plain text turns untouched', () => {
@@ -34,7 +39,7 @@ describe('withoutImageBlocks', () => {
     const out = withoutImageBlocks([
       { role: 'user', content: [img, img, img, { type: 'text', text: 'these three' }] },
     ]);
-    expect(out[0].content).toBe('these three [photo already reviewed]');
+    expect(out[0].content).toBe(`these three ${MARKER}`);
     expect(JSON.stringify(out)).not.toContain('base64');
     expect(JSON.stringify(out)).not.toContain('AAAA');
   });
@@ -46,6 +51,6 @@ describe('withoutImageBlocks', () => {
       { role: 'user', content: [img, { type: 'text', text: 'look' }] },
     ]);
     expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
-    expect(out[2].content).toBe('look [photo already reviewed]');
+    expect(out[2].content).toBe(`look ${MARKER}`);
   });
 });
