@@ -61,6 +61,37 @@ describe('loadMasterPrompt', () => {
     expect(prompt).toContain('[client sent an attachment that did not come through]');
   });
 
+  it('contains the QA Round 3 behavior fixes', () => {
+    const prompt = loadMasterPrompt();
+    expect(prompt).toContain('Vendor pitches versus VIP offers'); // 4.1
+    expect(prompt).toContain('Money flowing toward the salon is VIP'); // 4.1
+    expect(prompt).toContain('One objection is never enough'); // 4.2
+    expect(prompt).toContain('Two failures are equally forbidden here'); // 4.4 / 4.5
+    expect(prompt).toContain('never name or price a specific service from it'); // 4.5
+    expect(prompt).toContain('Answer the polarity of the question that was asked'); // 5.1
+    expect(prompt).toContain('Decline in YOUR voice, never in theirs'); // 5.6
+    expect(prompt).toContain('hair journey'); // 5.7 filler now banned
+    expect(prompt).toContain('una consulta'); // 5.8 native-quality rule
+  });
+
+  it('ships no example the model can copy verbatim across conversations', () => {
+    const prompt = loadMasterPrompt();
+    // 5.2: the same finished sentence appearing twice reads to the model as
+    // "this exact string is the right answer" — it shipped word for word in two
+    // different production conversations.
+    const youLines = prompt
+      .split('\n')
+      .filter((l) => /^You: "/.test(l))
+      .map((l) => l.trim());
+    const seen = new Set<string>();
+    for (const line of youLines) {
+      expect(seen.has(line)).toBe(false);
+      seen.add(line);
+    }
+    // And no example may hardcode a real stylist roster.
+    expect(prompt).not.toMatch(/renata, tash, and mia/i);
+  });
+
   it('the prompt obeys its own style rules (no banned phrases inside bot example lines)', () => {
     const prompt = loadMasterPrompt();
     // "happy to help" / "flag her" appeared in example replies and now conflict
