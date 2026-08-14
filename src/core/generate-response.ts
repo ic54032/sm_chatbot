@@ -11,6 +11,7 @@ import { matchInternalVocab } from '../sanitizer/internal-vocab.js';
 import { containsBookingIntent } from './detect-booking-intent.js';
 import { isRetryableLlmError } from '../llm/is-retryable.js';
 import { buildPrompt } from '../prompt/build.js';
+import { withoutImageBlocks } from '../prompt/strip-images.js';
 import { allTools } from '../prompt/tools.js';
 import { escalateToOwner } from './escalate.js';
 import { containsHandoffPromise } from './detect-handoff-promise.js';
@@ -59,6 +60,39 @@ export interface GenerateResponseResult {
    * re-enqueues so that message is not stranded unanswered. null means "do not
    * re-drive" (skipped/escalated paths). */
   latestInboundAt: Date | null;
+}
+
+/**
+ * Names from the salon's own knowledge base that must keep their capital when
+ * the lowercase style pass runs: the salon, the owner, every stylist. Read
+ * defensively — the SOT is per-salon JSON and a field may simply be absent.
+ */
+function salonProperNouns(salon: Salon): string[] {
+  const sot = salon.sourceOfTruth as {
+    salon_basics?: { salon_name?: unknown; owner_first_name?: unknown };
+    stylist_directory?: { stylists?: Array<{ preferred_name?: unknown; full_name?: unknown }> };
+  };
+  const names: unknown[] = [sot.salon_basics?.salon_name, sot.salon_basics?.owner_first_name];
+  for (const stylist of sot.stylist_directory?.stylists ?? []) {
+    names.push(stylist?.preferred_name, stylist?.full_name);
+  }
+
+  // Everything else the salon capitalises MID-SENTENCE in its own knowledge base
+  // is a proper noun too — product and brand names like Olaplex, a street name,
+  // a neighbouring business. Mid-sentence is the discriminator: a capital at the
+  // start of a policy sentence ("Cancellations under 24 hours...") is grammar,
+  // not a name, and protecting it would blunt the whole pass.
+  const walk = (node: unknown): void => {
+    if (typeof node === 'string') {
+      for (const [, word] of node.matchAll(/[^.!?]\s+(\p{Lu}[\p{Ll}]{2,})/gu)) names.push(word);
+      return;
+    }
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (node && typeof node === 'object') return Object.values(node).forEach(walk);
+  };
+  walk(salon.sourceOfTruth);
+
+  return [...new Set(names.filter((n): n is string => typeof n === 'string' && n.trim().length > 0))];
 }
 
 export async function generateResponse(
@@ -254,6 +288,56 @@ export async function generateResponse(
   // inbound identically, so without this the owner gets an alert per message.
   const LLM_FAILED_DEDUP_MINUTES = 30;
 
+  /**
+   * We could not get usable reply text this turn. Answer from whatever intent we
+   * already recovered, in descending order of how much the client was promised.
+   *
+   * Reached from two places: the model returned empty text twice, or the
+   * corrective retry's API call failed. Both mean the same thing to the client,
+   * and neither is an outage — so neither may be labelled as one.
+   */
+  const recoverWithoutText = async (why: string): Promise<void> => {
+    const owner = salon.sourceOfTruth.salon_basics.owner_first_name;
+
+    // Escalation intent first: the client was promised the owner, so the handoff
+    // goes out under its ORIGINAL reason (refund, medical, ...) and is never
+    // relabelled as a generic failure.
+    if (escalationArgs) {
+      logger.warn({ conversationId, why, reason: escalationArgs.reason }, 'no reply text; canned reassurance');
+      sanitized = {
+        messages: [`let me grab ${owner} for you, she'll jump in as soon as she's between clients 🤍`],
+        modifications: ['escalation_fallback_text'],
+      };
+      return;
+    }
+
+    // Link intent without the URL — the confirmed 2026-07-10 failure: the model
+    // fires mark_link_sent but writes nothing, so the client got no link at all.
+    if (linkSentToolCalled || containsBookingIntent(lastInbound?.textContent)) {
+      const recentlySent = linkSentToolCalled
+        ? await eventsRepo.recentBookingLinkSent(deps.db, conversationId, salon.config.booking_link_dedup_window_hours)
+        : bookingLinkRecentlySent;
+      const linkMessage = recentlySent
+        ? `the booking link I sent has all the latest openings 🤍`
+        : `here you go 🤍 ${salon.sourceOfTruth.booking.url}`;
+      logger.warn({ conversationId, why, recentlySent }, 'no reply text but booking intent; sending the link');
+      sanitized = {
+        messages: [linkMessage],
+        modifications: [linkSentToolCalled ? 'link_intent_no_text_fallback' : 'booking_intent_no_text_fallback'],
+      };
+      return;
+    }
+
+    // Nothing to go on. The client still must not get silence, so a reassurance
+    // line goes out and the normal post-send path escalates behind it.
+    logger.warn({ conversationId, why }, 'no reply text and no intent; reassurance then escalating');
+    sanitized = {
+      messages: [`let me grab ${owner} for you, she'll jump in as soon as she's between clients 🤍`],
+      modifications: ['sanitizer_empty_output_fallback_text'],
+    };
+    escalationArgs = { reason: 'sanitizer_empty_output' };
+  };
+
   outer: for (let emptyAttempt = 0; ; emptyAttempt++) {
     // LLM call with exception-retry (up to 3 API failures -> llm_failed).
     let apiAttempts = 0;
@@ -261,7 +345,7 @@ export async function generateResponse(
       try {
         llmResult = await deps.llm.complete({
           systemPrompt: prompt.systemPrompt,
-          messages: prompt.messages,
+          messages: forceTextRetry ? withoutImageBlocks(prompt.messages) : prompt.messages,
           tools: forceTextRetry ? [] : allTools,
           model: salon.config.llm_model ?? deps.defaultLlmModel,
           maxTokens: 512,
@@ -289,10 +373,26 @@ export async function generateResponse(
           continue;
         }
 
-        // Terminal. Dedup first: a broken model account fails every inbound the
-        // same way, and one red notification per client message buries the owner
-        // (production 2026-07-22: nine in a day). Inside the window, stay quiet
-        // entirely — the client already got a line and the owner already knows.
+        // A failure on a RETRY is not an outage. The first call of this turn
+        // already returned — the model answered, we only wanted better prose out
+        // of it — so the client is owed the intent we recovered, not a technical
+        // alert and a four-hour pause. Production 2026-08-08 and 2026-08-10: the
+        // retry 429'd on the tokens-per-minute limit and a perfectly healthy
+        // damage-photo lead was stamped `llm_failed` and frozen.
+        if (emptyAttempt > 0) {
+          logger.warn(
+            { err, conversationId, emptyAttempt },
+            'retry call failed after a successful first attempt; recovering from intent instead of escalating',
+          );
+          await recoverWithoutText('retry call failed');
+          break outer;
+        }
+
+        // Terminal on the FIRST call: this really is the model being unreachable.
+        // Dedup first: a broken account fails every inbound the same way, and one
+        // red notification per client message buries the owner (production
+        // 2026-07-22: nine in a day). Inside the window, stay quiet entirely —
+        // the client already got a line and the owner already knows.
         const alreadyNotified = await eventsRepo.recentEscalationWithReason(
           deps.db,
           conversationId,
@@ -432,6 +532,7 @@ export async function generateResponse(
     try {
       sanitized = await sanitize(cleanedText, {
         bookingLink: salon.sourceOfTruth.booking.url,
+        properNouns: salonProperNouns(salon),
         policy: {
           maxWordsPerMessage: salon.config.max_words_per_message,
           maxEmojis: salon.config.max_emojis,
@@ -473,72 +574,9 @@ export async function generateResponse(
           logger.warn({ conversationId, emptyAttempt }, 'llm produced empty output; corrective retry (tools dropped, text forced)');
           continue outer;
         }
-        // Everything below is the double-empty case: the model produced no text
-        // even with the nudge and its tools taken away. Now, and only now, do the
-        // canned lines fire.
-        //
-        // Escalation intent first — the client was promised the owner, so the
-        // handoff must go out with its ORIGINAL reason (refund, medical, ...),
-        // not be relabelled as a generic empty-output failure.
-        if (escalationArgs) {
-          const owner = salon.sourceOfTruth.salon_basics.owner_first_name;
-          const fallback = `let me grab ${owner} for you, she'll jump in as soon as she's between clients 🤍`;
-          logger.warn(
-            { conversationId, reason: escalationArgs.reason },
-            'escalation intent with no text after corrective retry; sending canned reassurance',
-          );
-          sanitized = { messages: [fallback], modifications: ['escalation_fallback_text'] };
-          break outer;
-        }
-        // Link intent without the URL — the confirmed 2026-07-10 failure: on
-        // booking messages GPT-4o fires mark_link_sent and set_state_flag but
-        // writes no text, so the client got nothing. Paste the link ourselves.
-        if (linkSentToolCalled) {
-          const bookingUrl = salon.sourceOfTruth.booking.url;
-          const recentlySent = await eventsRepo.recentBookingLinkSent(
-            deps.db,
-            conversationId,
-            salon.config.booking_link_dedup_window_hours,
-          );
-          const linkMessage = recentlySent
-            ? `the booking link I sent has all the latest openings 🤍`
-            : `here you go 🤍 ${bookingUrl}`;
-          logger.warn(
-            { conversationId, recentlySent },
-            'llm signaled link intent with empty text after corrective retry; sending booking link fallback',
-          );
-          sanitized = { messages: [linkMessage], modifications: ['link_intent_no_text_fallback'] };
-          break outer;
-        }
-        // Last-resort net for B4: if the client clearly asked to book, send the
-        // link rather than hand a converting client to a 4h handoff. Anchored
-        // keywords are a COARSE net
-        // here by design — the corrective retry already covers the vast majority of
-        // phrasings, so this only has to catch the common ready-to-book lines in the
-        // rare double-empty case. Reads only the client message, never a tool call.
-        if (containsBookingIntent(lastInbound?.textContent)) {
-          const bookingUrl = salon.sourceOfTruth.booking.url;
-          const linkMessage = bookingLinkRecentlySent
-            ? `the booking link I sent has all the latest openings 🤍`
-            : `here you go 🤍 ${bookingUrl}`;
-          logger.warn(
-            { conversationId, recentlySent: bookingLinkRecentlySent },
-            'empty text on a ready-to-book message after corrective retry; sending booking link fallback (B4)',
-          );
-          sanitized = { messages: [linkMessage], modifications: ['booking_intent_no_text_fallback'] };
-          break outer;
-        }
-        // Empty again after the corrective retry, no booking intent. We escalate,
-        // but the client must NOT get pure silence (production 2026: a client
-        // pointing out a price contradiction got dead air here). Send a reassurance
-        // line first, then let the normal post-send path fire the escalation.
-        logger.warn({ conversationId }, 'llm produced empty output again after corrective retry; sending reassurance then escalating');
-        const owner = salon.sourceOfTruth.salon_basics.owner_first_name;
-        sanitized = {
-          messages: [`let me grab ${owner} for you, she'll jump in as soon as she's between clients 🤍`],
-          modifications: ['sanitizer_empty_output_fallback_text'],
-        };
-        escalationArgs = { reason: 'sanitizer_empty_output' };
+        // The model produced no text even with the nudge and its tools taken
+        // away. Answer from the intent we already have.
+        await recoverWithoutText('double empty output');
         break outer;
       }
       throw err;

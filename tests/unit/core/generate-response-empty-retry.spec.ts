@@ -498,6 +498,85 @@ describe('generateResponse — empty-output retry', () => {
     expect((llm as unknown as { calls: number[] }).calls).toHaveLength(3);
   });
 
+  // Production 2026-08-08 and 2026-08-10 (QA Round 3, item 3.1): the first call
+  // returned tool calls with no prose, the corrective retry 429'd on the
+  // tokens-per-minute limit, and a healthy conversation was stamped `llm_failed`
+  // and frozen for four hours. A retry failing is not an outage — the model
+  // already answered once this turn.
+  it('a retry failure is NOT reported as an outage: recovers from carried escalation intent, original reason kept', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('i want a refund'));
+    const llm = {
+      calls: [] as unknown[],
+      complete: vi.fn(async (input: unknown) => {
+        (llm.calls as unknown[]).push(input);
+        if (llm.calls.length === 1) {
+          return {
+            text: '',
+            toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'refund_request' } }],
+            usage: { inputTokens: 18484, outputTokens: 52 },
+          };
+        }
+        throw Object.assign(new Error('Rate limit reached'), { status: 429 });
+      }),
+    } as never;
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('let me grab Renata');
+    // The refund reason survives; it must NOT be relabelled llm_failed.
+    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      'refund_request',
+      null,
+    );
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      'llm_failed',
+      null,
+    );
+  });
+
+  it('a retry failure with no intent escalates as sanitizer_empty_output, never llm_failed', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('what do you think?'));
+    let n = 0;
+    const llm = {
+      complete: vi.fn(async () => {
+        if (n++ === 0) return { text: '', toolCalls: [], usage: { inputTokens: 13000, outputTokens: 5 } };
+        throw Object.assign(new Error('Rate limit reached'), { status: 429 });
+      }),
+    } as never;
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      'sanitizer_empty_output',
+      null,
+    );
+  });
+
+  it('a failure on the FIRST call is still a genuine outage: llm_failed', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('hey'));
+    const llm = makeFailingLlm(Object.assign(new Error('bad gateway'), { status: 502 }));
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      'llm_failed',
+      null,
+    );
+  });
+
   it('dedups the alert storm: a repeat llm_failed inside the window is silent, no second escalation', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('hey, quick question'));
     vi.mocked(eventsRepo.recentEscalationWithReason).mockResolvedValue(true); // owner already alerted

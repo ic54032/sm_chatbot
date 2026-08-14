@@ -8,9 +8,10 @@ const baseCtx = {
 
 describe('sanitizer — forbidden chars', () => {
   it('replaces em-dash with a comma, absorbing the spaces around it', async () => {
-    const result = await sanitize('Hi there — how are you?', baseCtx);
+    // Input avoids a banned opener so this test measures the dash only.
+    const result = await sanitize('so glad you asked — how are you?', baseCtx);
     expect(result.messages[0]).not.toContain('—');
-    expect(result.messages[0]).toBe('Hi there, how are you?');
+    expect(result.messages[0]).toBe('so glad you asked, how are you?');
     expect(result.modifications).toContain('forbidden_chars_scrubbed');
   });
 
@@ -25,7 +26,7 @@ describe('sanitizer — forbidden chars', () => {
   it('replaces en-dash with a comma', async () => {
     const result = await sanitize('Open 9–5 today', baseCtx);
     expect(result.messages[0]).not.toContain('–');
-    expect(result.messages[0]).toBe('Open 9, 5 today');
+    expect(result.messages[0]).toBe('open 9, 5 today'); // style pass lowercases the opener
     expect(result.modifications).toContain('forbidden_chars_scrubbed');
   });
 

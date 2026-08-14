@@ -1,4 +1,4 @@
 {
-  "messages": ["Sure, want to come in Tuesday?"],
-  "modifications": []
+  "messages": ["sure, want to come in Tuesday?"],
+  "modifications": ["style_enforced"]
 }

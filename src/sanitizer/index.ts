@@ -1,8 +1,12 @@
 import { SanitizerEmptyOutputError } from '../lib/errors.js';
 import { splitOnSentenceBoundaries } from './split.js';
+import { applyStyleRules } from './style.js';
 
 export interface SanitizeContext {
   bookingLink: string;
+  /** Proper nouns from the salon knowledge base (salon name, stylists, brands).
+   * They keep their capital when the lowercase style pass runs. */
+  properNouns?: string[];
   policy: {
     maxWordsPerMessage: number;
     maxEmojis: number;
@@ -17,6 +21,36 @@ export interface SanitizeResult {
 export async function sanitize(raw: string, ctx: SanitizeContext): Promise<SanitizeResult> {
   const mods: string[] = [];
   let text = raw.trim();
+
+  // 0. Strip markdown BEFORE anything else touches the text.
+  //
+  //    Instagram renders no markdown — the Send API takes plain text only — so
+  //    `[book now](https://...)` reaches the client as literal syntax on the one
+  //    message type that matters most (QA Round 3, item 3.2).
+  //
+  //    Order is not a preference here, it is the bug. The URL regex below is
+  //    greedy to non-whitespace, so on `[book](https://x/book)` it captures the
+  //    closing paren into rawLinks, trimTrailingPunct removes it from links, and
+  //    the restore step emits `[book](https://x/book` — bracket noise plus a
+  //    swallowed paren. Reducing the link to its bare URL first makes the rest of
+  //    the pipeline see exactly what the client will.
+  const beforeMarkdown = text;
+  text = text
+    // [label](url) -> url. The URL class stops at whitespace or the closing
+    // paren, which is safe for the only links this bot sends (booking pages and
+    // the salon site); a URL containing balanced parens is a known regex limit
+    // and does not occur here.
+    .replace(/\[([^\]]*)\]\((\s*)(https?:\/\/[^\s)]+)\)/g, '$3')
+    // [label](not-a-url) -> label. Keeps the words, drops the syntax.
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    // Emphasis and code fences the model sometimes reaches for.
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/(^|\s)\*([^*\n]+)\*(?=\s|$|[.,!?])/g, '$1$2')
+    .replace(/`{1,3}([^`]+)`{1,3}/g, '$1')
+    // Leading heading or bullet markers at the start of a line.
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}[-*+]\s+/gm, '');
+  if (text !== beforeMarkdown) mods.push('markdown_stripped');
 
   // 1. Extract URLs first (protect them from forbidden-char scrub).
   const linkRe = /https?:\/\/\S+/g;
@@ -45,6 +79,12 @@ export async function sanitize(raw: string, ctx: SanitizeContext): Promise<Sanit
     .replace(/\s+/g, ' ')
     .trim();
   if (text !== beforeScrub) mods.push('forbidden_chars_scrubbed');
+
+  // 3b. Style rules the prompt keeps losing (QA Round 3, items 5.3 and 5.4).
+  //     Runs while URLs are still masked, so it can never touch a link.
+  const styled = applyStyleRules(text, { properNouns: ctx.properNouns ?? [] });
+  if (styled.changed) mods.push('style_enforced');
+  text = styled.text;
 
   // 4. URLs stay MASKED from here until after the split. A domain's dots look
   //    exactly like sentence boundaries to the splitter, which then rejoins the

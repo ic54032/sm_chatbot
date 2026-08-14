@@ -1,4 +1,4 @@
 {
-  "messages": ["Yay 🎉 love 💖 amazing perfect ‍️ done"],
-  "modifications": ["emojis_capped"]
+  "messages": ["yay 🎉 love 💖 amazing perfect ‍️ done"],
+  "modifications": ["emojis_capped", "style_enforced"]
 }

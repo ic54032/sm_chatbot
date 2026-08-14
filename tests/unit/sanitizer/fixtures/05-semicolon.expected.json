@@ -1,4 +1,4 @@
 {
-  "messages": ["First option, second option"],
-  "modifications": ["forbidden_chars_scrubbed"]
+  "messages": ["first option, second option"],
+  "modifications": ["forbidden_chars_scrubbed", "style_enforced"]
 }

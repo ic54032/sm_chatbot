@@ -1,4 +1,4 @@
 {
-  "messages": ["Visit https://example.com/book or our IG"],
-  "modifications": ["extra_links_stripped"]
+  "messages": ["visit https://example.com/book or our IG"],
+  "modifications": ["extra_links_stripped", "style_enforced"]
 }
