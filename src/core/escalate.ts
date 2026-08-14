@@ -16,15 +16,35 @@ export interface EscalateInput {
   conversation: Conversation;
   reason: string;
   contextSummary?: string;
+  /**
+   * Whether this also hands the conversation over, i.e. stops the bot until the
+   * owner is done. Defaults to true.
+   *
+   * Media is the exception (QA Round 3, item 4.6): a client sending a video or a
+   * voice note should get the owner's attention AND keep talking to the bot.
+   * Freezing that conversation for hours over an attachment costs a lead, and it
+   * made the tag dishonest — it claimed the bot was paused while the bot replied.
+   */
+  pauseBot?: boolean;
 }
 
 export async function escalateToOwner(input: EscalateInput): Promise<void> {
+  const pauseBot = input.pauseBot ?? true;
   const handoffUntil = new Date(Date.now() + input.salon.config.handoff_window_hours * 3600_000);
 
   await input.db.transaction().execute(async (tx) => {
-    await escalationsRepo.upsertActive(tx, input.conversation.id, input.reason, input.contextSummary ?? null);
-    await conversationsRepo.setHandoffUntil(tx, input.conversation.id, handoffUntil);
-    await eventsRepo.insert(tx, input.conversation.id, 'escalated_to_owner', { reason: input.reason });
+    // A notify-only alert deliberately writes NO escalations row. That table
+    // drives auto-resume, which finds rows whose conversation handoff has
+    // expired — with no handoff there is nothing to expire, so the row would sit
+    // active forever and never release its tag. The event carries the record.
+    if (pauseBot) {
+      await escalationsRepo.upsertActive(tx, input.conversation.id, input.reason, input.contextSummary ?? null);
+      await conversationsRepo.setHandoffUntil(tx, input.conversation.id, handoffUntil);
+    }
+    await eventsRepo.insert(tx, input.conversation.id, 'escalated_to_owner', {
+      reason: input.reason,
+      ...(pauseBot ? {} : { notifyOnly: true }),
+    });
   });
 
   try {
@@ -55,5 +75,13 @@ export async function escalateToOwner(input: EscalateInput): Promise<void> {
     }
   }
 
-  logger.info({ conversationId: input.conversation.id, reason: input.reason, handoffUntil }, 'escalated to owner');
+  logger.info(
+    {
+      conversationId: input.conversation.id,
+      reason: input.reason,
+      handoffUntil: pauseBot ? handoffUntil : null,
+      pauseBot,
+    },
+    pauseBot ? 'escalated to owner' : 'notified owner without pausing the bot',
+  );
 }

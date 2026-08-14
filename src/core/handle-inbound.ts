@@ -161,10 +161,16 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
     return;
   }
 
-  // Hard escalation prečaci — skip respond queue entirely for media we can't
-  // handle. Silent by design: no reply goes to the client, the owner picks the
-  // conversation up from the escalation notification and answers personally.
-  const escalationReason = hasVideo
+  // Media the bot cannot read: a video, a voice note, a photo whose URL never
+  // arrived, or a shared reel that GHL dropped at ingestion.
+  //
+  // The owner is notified, but the conversation is NOT frozen (QA Round 3, item
+  // 4.6). Pausing on an attachment cost leads and made the tag dishonest — it
+  // announced a paused bot while the bot went on replying. The client still gets
+  // an answer: the respond job is queued as normal, and the prompt sees a marker
+  // describing what arrived, so the model acknowledges it warmly without ever
+  // claiming to have seen it.
+  const notifyReason = hasVideo
     ? 'video_attachment'
     : hasAudio
       ? 'audio_attachment'
@@ -174,9 +180,15 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
           ? 'unviewable_media'
           : null;
 
-  if (escalationReason) {
-    await escalateToOwner({ db: deps.db, ghl, salon, conversation, reason: escalationReason });
-    return;
+  if (notifyReason) {
+    await escalateToOwner({
+      db: deps.db,
+      ghl,
+      salon,
+      conversation,
+      reason: notifyReason,
+      pauseBot: false,
+    });
   }
 
   // Standard put — queue respond job.

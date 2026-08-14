@@ -158,6 +158,7 @@ describe('handleInbound — attachment classification + escalation prečaci', ()
   let conversationsRepo: typeof import('../../../src/db/repos/conversations.js');
   let messagesRepo: typeof import('../../../src/db/repos/messages.js');
   let escalationsRepo: typeof import('../../../src/db/repos/escalations.js');
+  let eventsRepo: typeof import('../../../src/db/repos/events.js');
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -166,13 +167,14 @@ describe('handleInbound — attachment classification + escalation prečaci', ()
     conversationsRepo = await import('../../../src/db/repos/conversations.js');
     messagesRepo = await import('../../../src/db/repos/messages.js');
     escalationsRepo = await import('../../../src/db/repos/escalations.js');
+    eventsRepo = await import('../../../src/db/repos/events.js');
 
     vi.mocked(salonsRepo.findByLocationId).mockResolvedValue(fakeSalon);
     vi.mocked(conversationsRepo.findOrCreate).mockResolvedValue(fakeConversation);
     vi.mocked(messagesRepo.insertInbound).mockResolvedValue({ id: 'msg-1' });
   });
 
-  it('escalates with reason video_attachment when attachment.type=video, silently (no client reply), no respond job queued', async () => {
+  it('escalates with reason video_attachment when attachment.type=video, notify-only: owner told, bot keeps talking', async () => {
     const ghl = makeGhl({
       getMessage: vi.fn(async () => ({
         text: '',
@@ -184,14 +186,17 @@ describe('handleInbound — attachment classification + escalation prečaci', ()
 
     await handleInbound(deps, baseInput());
 
-    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
+    // Notify-only: the owner is told, the conversation is NOT frozen.
+    expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(
       expect.anything(),
       'conv-1',
-      'video_attachment',
-      null,
+      'escalated_to_owner',
+      { reason: 'video_attachment', notifyOnly: true },
     );
-    expect(ghl.sendMessage).not.toHaveBeenCalled();
-    expect(respondQueue.add).not.toHaveBeenCalled();
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+    expect(vi.mocked(conversationsRepo.setHandoffUntil)).not.toHaveBeenCalled();
+    expect(ghl.sendMessage).not.toHaveBeenCalled(); // handle-inbound never talks directly
+    expect(respondQueue.add).toHaveBeenCalledOnce(); // the bot still replies to the client
   });
 
   it('escalates with reason audio_attachment when attachment.type=audio', async () => {
@@ -206,14 +211,17 @@ describe('handleInbound — attachment classification + escalation prečaci', ()
 
     await handleInbound(deps, baseInput());
 
-    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
+    // Notify-only: the owner is told, the conversation is NOT frozen.
+    expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(
       expect.anything(),
       'conv-1',
-      'audio_attachment',
-      null,
+      'escalated_to_owner',
+      { reason: 'audio_attachment', notifyOnly: true },
     );
-    expect(ghl.sendMessage).not.toHaveBeenCalled();
-    expect(respondQueue.add).not.toHaveBeenCalled();
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+    expect(vi.mocked(conversationsRepo.setHandoffUntil)).not.toHaveBeenCalled();
+    expect(ghl.sendMessage).not.toHaveBeenCalled(); // handle-inbound never talks directly
+    expect(respondQueue.add).toHaveBeenCalledOnce(); // the bot still replies to the client
   });
 
   it('escalates with reason image_without_url when image attachment has no url', async () => {
@@ -228,14 +236,17 @@ describe('handleInbound — attachment classification + escalation prečaci', ()
 
     await handleInbound(deps, baseInput());
 
-    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
+    // Notify-only: the owner is told, the conversation is NOT frozen.
+    expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(
       expect.anything(),
       'conv-1',
-      'image_without_url',
-      null,
+      'escalated_to_owner',
+      { reason: 'image_without_url', notifyOnly: true },
     );
-    expect(ghl.sendMessage).not.toHaveBeenCalled();
-    expect(respondQueue.add).not.toHaveBeenCalled();
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+    expect(vi.mocked(conversationsRepo.setHandoffUntil)).not.toHaveBeenCalled();
+    expect(ghl.sendMessage).not.toHaveBeenCalled(); // handle-inbound never talks directly
+    expect(respondQueue.add).toHaveBeenCalledOnce(); // the bot still replies to the client
   });
 
   it('queues respond job when inbound has text + image with URL, no escalation', async () => {
@@ -304,32 +315,25 @@ describe('handleInbound — attachment classification + escalation prečaci', ()
       baseInput({ messageId: null, messageText: null, rawPayload: { attachments_raw: [] } }),
     );
 
-    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
+    // Notify-only: the owner is told, the conversation is NOT frozen.
+    expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(
       expect.anything(),
       'conv-1',
-      'unviewable_media',
-      null,
+      'escalated_to_owner',
+      { reason: 'unviewable_media', notifyOnly: true },
     );
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+    expect(vi.mocked(conversationsRepo.setHandoffUntil)).not.toHaveBeenCalled();
     // Persisted as an inbound media row so the owner/analytics has a record.
     expect(vi.mocked(messagesRepo.insertInbound)).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ channelType: 'image', textContent: null }),
     );
-    // Silent to the client + no respond job — a human picks it up.
-    expect(ghl.sendMessage).not.toHaveBeenCalled();
-    expect(respondQueue.add).not.toHaveBeenCalled();
-    // Causal link that makes the escalation self-limiting: it sets a handoff
-    // ~handoff_window_hours (4h) in the future, so the NEXT bare event on this
-    // conversation short-circuits at the handoff guard instead of re-escalating.
-    expect(vi.mocked(conversationsRepo.setHandoffUntil)).toHaveBeenCalledWith(
-      expect.anything(),
-      'conv-1',
-      expect.any(Date),
-    );
-    const handoffDate = vi.mocked(conversationsRepo.setHandoffUntil).mock.calls[0][2] as Date;
-    const hoursOut = (handoffDate.getTime() - Date.now()) / 3_600_000;
-    expect(hoursOut).toBeGreaterThan(3.9);
-    expect(hoursOut).toBeLessThan(4.1);
+    // The bot still answers: the prompt receives a marker describing what
+    // arrived, so the client gets a warm reply instead of silence while the
+    // owner is notified in parallel (QA Round 3, item 4.6).
+    expect(ghl.sendMessage).not.toHaveBeenCalled(); // handle-inbound never talks directly
+    expect(respondQueue.add).toHaveBeenCalledOnce();
   });
 
   it('does NOT re-escalate unviewable media when a handoff is already active (self-limiting)', async () => {

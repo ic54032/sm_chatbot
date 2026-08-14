@@ -21,9 +21,17 @@ const LABELS: Record<string, string> = {
   client_refused_consultation_path: 'Wants a direct answer, skipped the consult',
   hostile_language: 'Hostile message, take a look',
 
-  // Media the bot cannot read
-  video_attachment: 'Client sent a video, take a look',
-  audio_attachment: 'Client sent a voice note, take a look',
+  // Media the bot cannot read.
+  //
+  // Video and voice notes share one label on purpose. GHL delivers both as .mp4
+  // and serves both as video/mp4, so the only way to tell them apart is to read
+  // the container bytes at request time — and when that probe does not return in
+  // time the guess falls back to "video", which is how a voice note was
+  // announced as a video for three QA rounds running. A merged label is slightly
+  // less specific and always true, which is the better trade for a notification
+  // the owner acts on.
+  video_attachment: 'Client sent a video or voice note, take a look',
+  audio_attachment: 'Client sent a video or voice note, take a look',
   unviewable_media: "Client shared a reel or disappearing photo, take a look",
   image_without_url: "Client sent a photo I couldn't open, take a look",
   image_processing_disabled: 'Client sent a photo, take a look',

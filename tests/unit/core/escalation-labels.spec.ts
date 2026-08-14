@@ -17,8 +17,11 @@ describe('escalationLabel', () => {
   });
 
   it('maps the media reasons', () => {
-    expect(escalationLabel('video_attachment')).toBe('Client sent a video, take a look');
-    expect(escalationLabel('audio_attachment')).toBe('Client sent a voice note, take a look');
+    // Video and voice notes share a label: GHL delivers both as .mp4 and serves
+    // both as video/mp4, so "voice note" cannot be promised reliably. Merged is
+    // less specific and always true (QA Round 3, item 4.3).
+    expect(escalationLabel('video_attachment')).toBe('Client sent a video or voice note, take a look');
+    expect(escalationLabel('audio_attachment')).toBe('Client sent a video or voice note, take a look');
     expect(escalationLabel('unviewable_media')).toContain('reel');
   });
 
