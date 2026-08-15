@@ -9,7 +9,7 @@ import * as salonsRepo from '../db/repos/salons.js';
 import { sanitize } from '../sanitizer/index.js';
 import { matchInternalVocab } from '../sanitizer/internal-vocab.js';
 import { containsBookingIntent } from './detect-booking-intent.js';
-import { isRetryableLlmError } from '../llm/is-retryable.js';
+import { isRetryableLlmError, retryDelayMs } from '../llm/is-retryable.js';
 import { buildPrompt } from '../prompt/build.js';
 import { withoutImageBlocks } from '../prompt/strip-images.js';
 import { allTools } from '../prompt/tools.js';
@@ -369,7 +369,12 @@ export async function generateResponse(
         // exhausted quota fails identically every time, so three attempts just
         // add latency and noise to an outage a human has to fix.
         if (retryable && apiAttempts < 3) {
-          await new Promise((r) => setTimeout(r, 500 * 2 ** apiAttempts));
+          // OpenAI states the exact wait in retry-after-ms on a rate limit.
+          // Reading it beats guessing: a blind backoff that is a hair too short
+          // burns all three attempts inside the same window for nothing.
+          const delay = retryDelayMs(err, apiAttempts);
+          logger.info({ conversationId, apiAttempts, delay }, 'retrying llm call');
+          await new Promise((r) => setTimeout(r, delay));
           continue;
         }
 
