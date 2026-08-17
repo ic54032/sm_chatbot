@@ -47,9 +47,27 @@ export function buildPrompt(input: BuildPromptInput): BuildPromptOutput {
 The booking URL is: ${bookingUrl}
 Paste it exactly, character for character, whenever you share it. Never paraphrase, shorten, or describe it.`;
 
+  // How many images the model can actually see on THIS turn: the pixels attached
+  // to whatever the client has sent since our last reply.
+  //
+  // This is stated as a FACT rather than left for the model to infer, because
+  // inferring it has failed repeatedly. With no image in context at all the bot
+  // still praised "the vibe of that reel" and "that blend in the reel"
+  // (production 2026-08-17), reaching back to a link or a two-day-old photo in the
+  // history. Four prompt rules forbidding that did not hold — a 52KB prompt has
+  // too much competing for attention — but the model demonstrably does read and
+  // obey this state block, which is how the booking-link dedup works.
+  let visiblePhotos = 0;
+  for (let i = ctx.recentMessages.length - 1; i >= 0; i--) {
+    const m = ctx.recentMessages[i];
+    if (m.direction !== 'inbound') break; // stop at our own last reply
+    visiblePhotos += imagesByMessageId.get(m.id)?.length ?? 0;
+  }
+
   const stateLines = [
     `- Booking link sent recently (within last ${salon.config.booking_link_dedup_window_hours}h): ${bookingLinkRecentlySent}`,
     `- Total inbound messages this conversation: ${inboundCount}`,
+    `- Photos visible to you this turn: ${visiblePhotos}`,
     `- State flags JSON: ${JSON.stringify(state)}`,
   ];
 

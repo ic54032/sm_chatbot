@@ -175,6 +175,83 @@ describe('buildPrompt multimodal output', () => {
   });
 });
 
+/**
+ * The photo count is stated as a fact because four separate prompt rules failed
+ * to stop the model inventing visual detail. With zero images in context it
+ * praised "the vibe of that reel" and "that blend in the reel" (production
+ * 2026-08-17), reaching back to a pasted link and a two-day-old photo. Each case
+ * below is one of those failures, so a regression here is a regression in
+ * client-visible behaviour.
+ */
+describe('buildPrompt photo visibility fact', () => {
+  const line = (n: number) => `- Photos visible to you this turn: ${n}`;
+  const build = (msgs: ConversationContext['recentMessages'], imgs: Map<string, ProcessedImage[]> = new Map()) =>
+    buildPrompt({ salon: makeSalon(), ctx: baseCtx(msgs), bookingLinkRecentlySent: false, imagesByMessageId: imgs }).systemPrompt;
+
+  it('reports 0 on a text-only turn', () => {
+    expect(build([makeMsg('m1', 'inbound', 'could i pull this off?')])).toContain(line(0));
+  });
+
+  it('counts the photo attached to the current turn', () => {
+    const imgs = new Map([['m1', [img]]]);
+    expect(build([makeMsg('m1', 'inbound', 'like this?')], imgs)).toContain(line(1));
+  });
+
+  it('counts every photo in a multi-message burst since our last reply', () => {
+    const msgs = [
+      makeMsg('m1', 'outbound', 'hey! what were you thinking?'),
+      makeMsg('m2', 'inbound', 'this one'),
+      makeMsg('m3', 'inbound', 'and this'),
+    ];
+    const imgs = new Map([
+      ['m2', [img]],
+      ['m3', [img]],
+    ]);
+    expect(build(msgs, imgs)).toContain(line(2));
+  });
+
+  // The exact production failure: a photo two days back, our reply after it, then
+  // a bare text question. Those pixels are NOT on this request, so claiming to see
+  // them is a fabrication.
+  it('does not count a photo that our own reply has already scrolled past', () => {
+    const msgs = [
+      makeMsg('m1', 'inbound', 'thoughts?'),
+      makeMsg('m2', 'outbound', 'love the shape of that fringe'),
+      makeMsg('m3', 'inbound', 'and how much would it be?'),
+    ];
+    const imgs = new Map([['m1', [img]]]);
+    expect(build(msgs, imgs)).toContain(line(0));
+  });
+
+  // An owner turn is a real reply on the wire, so it ends the burst exactly like
+  // an outbound one. Treating it as inbound would resurrect the bug during handoff.
+  it('treats an owner reply as the end of the burst', () => {
+    const owner = { ...makeMsg('m2', 'outbound', 'hi, renata here'), direction: 'owner' as const };
+    const msgs = [makeMsg('m1', 'inbound', 'hi'), owner, makeMsg('m3', 'inbound', 'still there?')];
+    const imgs = new Map([['m1', [img]]]);
+    expect(build(msgs, imgs)).toContain(line(0));
+  });
+
+  it('reports 0 when a photo was sent but could not be opened', () => {
+    // The pixels never arrived, so the model must ask for a resend rather than
+    // describe them — same fact, different cause.
+    const systemPrompt = buildPrompt({
+      salon: makeSalon(),
+      ctx: baseCtx([makeMsg('m1', 'inbound', 'like this')]),
+      bookingLinkRecentlySent: false,
+      imagesByMessageId: new Map(),
+      unviewableImageMessageIds: new Set(['m1']),
+    }).systemPrompt;
+    expect(systemPrompt).toContain(line(0));
+  });
+
+  it('states the count as a fact the prompt body knows how to read', () => {
+    // The state line and the rule that interprets it must agree on the wording,
+    // the way the booking-link dedup line already does.
+    expect(build([makeMsg('m1', 'inbound', 'hi')])).toContain('Photos visible to you this turn');
+  });
+});
+
 describe('buildPrompt time awareness', () => {
   const hourMs = 3_600_000;
 

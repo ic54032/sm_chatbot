@@ -108,10 +108,26 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
   const unviewableMedia = !textContent && attachments.length === 0 && attachmentsRawPresent;
 
   if (!textContent && attachments.length === 0 && !unviewableMedia) {
-    // Truly empty event: no text, no attachments, no attachments_raw. A system
-    // ping (receipt / typing / lifecycle), not a client message. Drop silently.
+    // Truly empty event: no text, no attachments, no attachments_raw value we
+    // can use. Most likely a system ping (receipt / typing / lifecycle) rather
+    // than a client message, so it is dropped.
+    //
+    // This is the one path that discards a client message with no database row
+    // behind it, so it logs the two values that DECIDED the drop rather than the
+    // whole payload (already dumped unconditionally above). The distinction
+    // matters because the sibling branch treats attachments_raw = [] as real
+    // media while an empty STRING lands here — a split that follows from how the
+    // merge tag renders, not from a decision anyone made. When a client's photo
+    // went missing on 2026-08-17 we could not say whether GHL never sent it or
+    // whether it arrived here and we threw it away, and that difference decides
+    // whose bug it is.
     logger.warn(
-      { locationId: input.locationId, contactId: input.contactId },
+      {
+        locationId: input.locationId,
+        contactId: input.contactId,
+        attachmentsRawType: typeof attachmentsRawValue,
+        attachmentsRawValue,
+      },
       'inbound has no text and no attachments; dropping',
     );
     return;
