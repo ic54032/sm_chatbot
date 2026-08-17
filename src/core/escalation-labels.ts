@@ -32,7 +32,10 @@ const LABELS: Record<string, string> = {
   // the owner acts on.
   video_attachment: 'Client sent a video or voice note, take a look',
   audio_attachment: 'Client sent a video or voice note, take a look',
-  unviewable_media: "Client shared a reel or disappearing photo, take a look",
+  // Not "disappearing photo": a vanish-mode photo produces no webhook at all
+  // (verified 2026-08-17 — nothing reaches GHL, let alone us), so it can never
+  // land on this branch. What does land here is a shared reel or post.
+  unviewable_media: 'Client shared a reel or post, take a look',
   image_without_url: "Client sent a photo I couldn't open, take a look",
   image_processing_disabled: 'Client sent a photo, take a look',
   attachment_fetch_failed: "Client sent a photo I couldn't open, take a look",

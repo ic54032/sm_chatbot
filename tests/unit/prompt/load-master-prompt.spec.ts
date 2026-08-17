@@ -92,6 +92,26 @@ describe('loadMasterPrompt', () => {
     expect(prompt).not.toMatch(/renata, tash, and mia/i);
   });
 
+  // Three separate Round 3 findings traced back to the prompt shipping the very
+  // behaviour it forbids as a GOOD example. Guard the two that already bit us.
+  it('a generic photo opener appears only as a Bad example', () => {
+    const prompt = loadMasterPrompt();
+    // These phrases may appear ONLY on a "Bad:" line. Anywhere else they are an
+    // example the model copies, which is exactly how one reached a client
+    // (production 2026-08-15).
+    for (const phrase of ['ooh love this inspo', 'thanks for sharing the photo']) {
+      const lines = [...prompt.matchAll(new RegExp('^.*' + phrase + '.*$', 'gim'))].map((m) => m[0]);
+      expect(lines.length).toBeGreaterThan(0); // the Bad example must still be there
+      for (const line of lines) expect(line.trimStart()).toMatch(/^Bad:/i);
+    }
+  });
+
+  it('the consult objection and photo observation each ship a worked example', () => {
+    const prompt = loadMasterPrompt();
+    expect(prompt).toContain('escalates on the first objection'); // 4.2 BAD pair
+    expect(prompt).toContain('names something only THIS photo could have shown'); // 1.3 GOOD pair
+  });
+
   it('the prompt obeys its own style rules (no banned phrases inside bot example lines)', () => {
     const prompt = loadMasterPrompt();
     // "happy to help" / "flag her" appeared in example replies and now conflict
