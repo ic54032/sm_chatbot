@@ -58,16 +58,29 @@ Paste it exactly, character for character, whenever you share it. Never paraphra
   // too much competing for attention — but the model demonstrably does read and
   // obey this state block, which is how the booking-link dedup works.
   let visiblePhotos = 0;
-  for (let i = ctx.recentMessages.length - 1; i >= 0; i--) {
+  let i = ctx.recentMessages.length - 1;
+  for (; i >= 0; i--) {
     const m = ctx.recentMessages[i];
     if (m.direction !== 'inbound') break; // stop at our own last reply
     visiblePhotos += imagesByMessageId.get(m.id)?.length ?? 0;
+  }
+
+  // Photos from EARLIER turns, the ones we have already replied to. Without this
+  // second number "visible: 0" is ambiguous in a way that matters: a client who
+  // never sent anything should be invited to, while a client following up on the
+  // photo we described one turn ago must NOT be asked to send it again. Telling
+  // those apart from the history is exactly the inference the model keeps getting
+  // wrong, so it gets stated too.
+  let answeredPhotos = 0;
+  for (; i >= 0; i--) {
+    answeredPhotos += imagesByMessageId.get(ctx.recentMessages[i].id)?.length ?? 0;
   }
 
   const stateLines = [
     `- Booking link sent recently (within last ${salon.config.booking_link_dedup_window_hours}h): ${bookingLinkRecentlySent}`,
     `- Total inbound messages this conversation: ${inboundCount}`,
     `- Photos visible to you this turn: ${visiblePhotos}`,
+    `- Photos earlier in this conversation, already answered: ${answeredPhotos}`,
     `- State flags JSON: ${JSON.stringify(state)}`,
   ];
 

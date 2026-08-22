@@ -245,6 +245,34 @@ describe('buildPrompt photo visibility fact', () => {
     expect(systemPrompt).toContain(line(0));
   });
 
+  // "visible: 0" alone is ambiguous, and the two readings need opposite replies:
+  // invite a photo that never arrived, but never ask a client to re-send one we
+  // already described.
+  it('separates photos never sent from photos already answered', () => {
+    const earlier = (msgs: ConversationContext['recentMessages'], imgs: Map<string, ProcessedImage[]>) =>
+      build(msgs, imgs).match(/- Photos earlier in this conversation, already answered: (\d+)/)?.[1];
+
+    // Nothing ever arrived.
+    expect(earlier([makeMsg('m1', 'inbound', 'could i pull this off?')], new Map())).toBe('0');
+
+    // Photo, our reply, then a bare follow-up: visible 0, earlier 1.
+    const followUp = [
+      makeMsg('m1', 'inbound', 'thoughts?'),
+      makeMsg('m2', 'outbound', 'love the shape of that fringe'),
+      makeMsg('m3', 'inbound', 'could i pull this off?'),
+    ];
+    const imgs = new Map([['m1', [img]]]);
+    expect(build(followUp, imgs)).toContain(line(0));
+    expect(earlier(followUp, imgs)).toBe('1');
+  });
+
+  it('does not double-count the current turn as an earlier photo', () => {
+    const imgs = new Map([['m1', [img]]]);
+    const prompt = build([makeMsg('m1', 'inbound', 'like this?')], imgs);
+    expect(prompt).toContain(line(1));
+    expect(prompt).toContain('already answered: 0');
+  });
+
   it('states the count as a fact the prompt body knows how to read', () => {
     // The state line and the rule that interprets it must agree on the wording,
     // the way the booking-link dedup line already does.
