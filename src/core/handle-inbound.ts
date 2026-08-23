@@ -10,6 +10,7 @@ import { logger } from '../lib/logger.js';
 import { escalateToOwner } from './escalate.js';
 import { parseWebhookAttachments } from '../images/parse-webhook-attachments.js';
 import { refineMediaTypes } from '../images/refine-media-type.js';
+import { containsSharedMediaLink } from './shared-media-link.js';
 
 export interface HandleInboundInput {
   locationId: string;
@@ -192,8 +193,12 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
       ? 'audio_attachment'
       : imagesMissingUrl.length > 0
         ? 'image_without_url'
-        : unviewableMedia
-          ? 'unviewable_media'
+        : unviewableMedia || containsSharedMediaLink(textContent)
+          ? // Both shapes of a shared post land here. A native share arrives as an
+            // empty webhook with attachments_raw set; a pasted or forwarded link
+            // arrives as ordinary text. The owner needs the same note either way,
+            // and the label already reads "Client shared a reel or post".
+            'unviewable_media'
           : null;
 
   if (notifyReason) {

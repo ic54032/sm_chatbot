@@ -136,6 +136,34 @@ describe('loadMasterPrompt', () => {
     expect(prompt).not.toContain(';');
   });
 
+  /**
+   * The bot admitted a limitation three times in one production session — "i can't
+   * hear voice notes", "i can't view videos", "i can't view the reel directly"
+   * (2026-08-23) — while the prompt forbade exactly that in four places. Every one
+   * of those places named the phrasing it was banning, and none of them named the
+   * three phrases the model actually used, so the ban list was losing a game of
+   * whack-a-mole it could not win.
+   *
+   * The rules are now written as the ACTION to take, on the theory that a
+   * prohibition naming a phrase supplies it. That is a hypothesis, not a proven
+   * fact, so it is pinned here: reintroducing the negations should be a deliberate
+   * decision with new evidence, not an accident of a future prompt swap.
+   */
+  it('states the media rules as actions rather than naming the phrases they ban', () => {
+    const prompt = loadMasterPrompt();
+    for (const primer of [
+      'Never admit a technical limitation',
+      'can or cannot open',
+      "the image didn't come through",
+      'Never mention a technical problem',
+    ]) {
+      expect(prompt).not.toContain(primer);
+    }
+    // And the positive replacements must actually be there.
+    expect(prompt).toContain('Your own senses are never the subject of the reply');
+    expect(prompt).toContain('A link is text');
+  });
+
   it('contains the heart emoji, not the mojibake artifact', () => {
     const prompt = loadMasterPrompt();
     expect(prompt).toContain('🤍');
