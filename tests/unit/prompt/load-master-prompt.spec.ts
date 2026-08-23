@@ -66,8 +66,11 @@ describe('loadMasterPrompt', () => {
     expect(prompt).toContain('Vendor pitches versus VIP offers'); // 4.1
     expect(prompt).toContain('Money flowing toward the salon is VIP'); // 4.1
     expect(prompt).toContain('One objection is never enough'); // 4.2
-    expect(prompt).toContain('Two failures are equally forbidden here'); // 4.4 / 4.5
-    expect(prompt).toContain('never name or price a specific service from it'); // 4.5
+    // Anchors re-pointed when the block was rewritten to stop naming the phrases
+    // it banned. The rules they guard are unchanged: do not claim media you did
+    // not receive (4.4), and never guess a service from it (4.5).
+    expect(prompt).toContain('There are two ways to go wrong here'); // 4.4 / 4.5
+    expect(prompt).toContain('the look in it is not yours to name or price'); // 4.5
     expect(prompt).toContain('Answer the polarity of the question that was asked'); // 5.1
     expect(prompt).toContain('Decline in YOUR voice, never in theirs'); // 5.6
     expect(prompt).toContain('hair journey'); // 5.7 filler now banned
@@ -156,12 +159,36 @@ describe('loadMasterPrompt', () => {
       'can or cannot open',
       "the image didn't come through",
       'Never mention a technical problem',
+      // Two more that survived the first pass, in the one block that carried the
+      // heaviest concentration of them.
+      'Do not ADMIT a limitation',
+      'no admission of any limitation',
     ]) {
       expect(prompt).not.toContain(primer);
     }
     // And the positive replacements must actually be there.
     expect(prompt).toContain('Your own senses are never the subject of the reply');
     expect(prompt).toContain('A link is text');
+  });
+
+  /**
+   * QA report 4.5 prescribes "love that one 🤍" as the GOOD reply to a shared reel,
+   * which contradicts 4.4 in the same report: 4.4 warns that praising unseen media
+   * traps the bot, because the client's next message is "so what do you think?".
+   * Resolved in favour of 4.4 — ask what they are going for, never opine on
+   * content that never arrived. The phrase stays out of the prompt entirely rather
+   * than living on as a Bad example, since a quotable phrase gets copied whichever
+   * label sits next to it (469f39c, and the four primers above).
+   */
+  it('never supplies a phrase that praises media it has not seen', () => {
+    const prompt = loadMasterPrompt();
+    // Scoped to UNSEEN media. "ooh love this inspo" stays as a Bad example on
+    // purpose (469f39c): that one is about a photo the bot really can see, where
+    // the failure is genericness, and it has its own guard above.
+    for (const praise of ['love that one', "I see what you're looking at"]) {
+      expect(prompt).not.toContain(praise);
+    }
+    expect(prompt).toContain('Praising the thing sounds warm and costs nothing');
   });
 
   it('contains the heart emoji, not the mojibake artifact', () => {
