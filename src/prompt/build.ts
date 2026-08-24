@@ -12,6 +12,10 @@ export interface BuildPromptInput {
   /** Inbound messages whose image could not be fetched/processed — marked so the
    * model asks for a resend instead of the backend silently escalating. */
   unviewableImageMessageIds?: Set<string>;
+  /** Newest inbound a previous reply actually answered, from the 'replied' event
+   * stream. Everything after it is what this turn owes the client. null means no
+   * reply has ever been recorded, so the whole window is unanswered. */
+  lastAnsweredInboundAt?: Date | null;
 }
 
 export interface BuildPromptOutput {
@@ -43,6 +47,7 @@ export function hoursSinceLastClientMessage(messages: ConversationContext['recen
 
 export function buildPrompt(input: BuildPromptInput): BuildPromptOutput {
   const { salon, ctx, bookingLinkRecentlySent, imagesByMessageId, unviewableImageMessageIds } = input;
+  const answeredUpTo = input.lastAnsweredInboundAt ?? null;
   const sot = salon.sourceOfTruth;
   const bookingUrl = sot.booking.url;
   const state = ctx.conversation.state;
@@ -70,25 +75,38 @@ Paste it exactly, character for character, whenever you share it. Never paraphra
   // answered the first and the last. Coalescing and the drain were both correct;
   // nothing told the model that a trailing run of client messages is one burst in
   // which every question still needs an answer.
+  //
+  // "Unanswered" is decided by the 'replied' event stream, NOT by walking back to
+  // the nearest outbound. That shortcut was the first version of this and it was
+  // wrong in production within a day: on 2026-08-24 16:49 an inbound arrived while
+  // the previous turn was mid-flight, our reply row landed AFTER it, so the window
+  // ended on an assistant turn and every count came out 0 with a real message
+  // waiting. The answered-guard above this function documents the same trap in the
+  // same words — a reply is always timestamped after a message it did not answer.
+  //
+  // The cost of getting it wrong is not a wrong log line. All three of these
+  // numbers drive prompt rules, so a 0 here silently disables the burst rule in
+  // exactly the fast-typing timing that needs it, and tells the model it has no
+  // photo on a turn where the pixels are right there.
+  const isUnanswered = (m: ConversationContext['recentMessages'][number]) =>
+    m.direction === 'inbound' && (!answeredUpTo || m.createdAt.getTime() > answeredUpTo.getTime());
+
   let visiblePhotos = 0;
   let waitingMessages = 0;
-  let i = ctx.recentMessages.length - 1;
-  for (; i >= 0; i--) {
-    const m = ctx.recentMessages[i];
-    if (m.direction !== 'inbound') break; // stop at our own last reply
-    visiblePhotos += imagesByMessageId.get(m.id)?.length ?? 0;
-    waitingMessages += 1;
-  }
-
-  // Photos from EARLIER turns, the ones we have already replied to. Without this
-  // second number "visible: 0" is ambiguous in a way that matters: a client who
-  // never sent anything should be invited to, while a client following up on the
-  // photo we described one turn ago must NOT be asked to send it again. Telling
-  // those apart from the history is exactly the inference the model keeps getting
-  // wrong, so it gets stated too.
   let answeredPhotos = 0;
-  for (; i >= 0; i--) {
-    answeredPhotos += imagesByMessageId.get(ctx.recentMessages[i].id)?.length ?? 0;
+  for (const m of ctx.recentMessages) {
+    if (m.direction !== 'inbound') continue;
+    const photos = imagesByMessageId.get(m.id)?.length ?? 0;
+    if (isUnanswered(m)) {
+      waitingMessages += 1;
+      visiblePhotos += photos;
+    } else {
+      // Photos we have already replied to. Without this second number
+      // "visible: 0" is ambiguous in a way that matters: a client who never sent
+      // anything should be invited to, while a client following up on the photo we
+      // described one turn ago must NOT be asked to send it again.
+      answeredPhotos += photos;
+    }
   }
 
   const stateLines = [

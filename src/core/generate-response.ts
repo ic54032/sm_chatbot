@@ -232,7 +232,14 @@ export async function generateResponse(
     }
   }
 
-  const prompt = buildPrompt({ salon, ctx, bookingLinkRecentlySent, imagesByMessageId, unviewableImageMessageIds });
+  const prompt = buildPrompt({
+    salon,
+    ctx,
+    bookingLinkRecentlySent,
+    imagesByMessageId,
+    unviewableImageMessageIds,
+    lastAnsweredInboundAt,
+  });
 
   // DIAGNOSTIC: confirm whether image content blocks actually reach the LLM call.
   // Empirical question: bot's response sounded image-aware on first turn but

@@ -185,8 +185,18 @@ describe('buildPrompt multimodal output', () => {
  */
 describe('buildPrompt photo visibility fact', () => {
   const line = (n: number) => `- Photos visible to you this turn: ${n}`;
-  const build = (msgs: ConversationContext['recentMessages'], imgs: Map<string, ProcessedImage[]> = new Map()) =>
-    buildPrompt({ salon: makeSalon(), ctx: baseCtx(msgs), bookingLinkRecentlySent: false, imagesByMessageId: imgs }).systemPrompt;
+  const build = (
+    msgs: ConversationContext['recentMessages'],
+    imgs: Map<string, ProcessedImage[]> = new Map(),
+    lastAnsweredInboundAt: Date | null = null,
+  ) =>
+    buildPrompt({
+      salon: makeSalon(),
+      ctx: baseCtx(msgs),
+      bookingLinkRecentlySent: false,
+      imagesByMessageId: imgs,
+      lastAnsweredInboundAt,
+    }).systemPrompt;
 
   it('reports 0 on a text-only turn', () => {
     expect(build([makeMsg('m1', 'inbound', 'could i pull this off?')])).toContain(line(0));
@@ -213,23 +223,30 @@ describe('buildPrompt photo visibility fact', () => {
   // The exact production failure: a photo two days back, our reply after it, then
   // a bare text question. Those pixels are NOT on this request, so claiming to see
   // them is a fabrication.
-  it('does not count a photo that our own reply has already scrolled past', () => {
+  it('does not count a photo an earlier reply already answered', () => {
+    const t0 = new Date('2026-08-24T10:00:00Z');
     const msgs = [
-      makeMsg('m1', 'inbound', 'thoughts?'),
-      makeMsg('m2', 'outbound', 'love the shape of that fringe'),
-      makeMsg('m3', 'inbound', 'and how much would it be?'),
+      makeMsg('m1', 'inbound', 'thoughts?', t0),
+      makeMsg('m2', 'outbound', 'love the shape of that fringe', new Date('2026-08-24T10:00:05Z')),
+      makeMsg('m3', 'inbound', 'and how much would it be?', new Date('2026-08-24T10:01:00Z')),
     ];
     const imgs = new Map([['m1', [img]]]);
-    expect(build(msgs, imgs)).toContain(line(0));
+    expect(build(msgs, imgs, t0)).toContain(line(0));
   });
 
-  // An owner turn is a real reply on the wire, so it ends the burst exactly like
-  // an outbound one. Treating it as inbound would resurrect the bug during handoff.
-  it('treats an owner reply as the end of the burst', () => {
-    const owner = { ...makeMsg('m2', 'outbound', 'hi, renata here'), direction: 'owner' as const };
-    const msgs = [makeMsg('m1', 'inbound', 'hi'), owner, makeMsg('m3', 'inbound', 'still there?')];
-    const imgs = new Map([['m1', [img]]]);
-    expect(build(msgs, imgs)).toContain(line(0));
+  // Ordering is NOT the predicate. A reply row can land after a message it did not
+  // answer (production 2026-08-24 16:49), which is why the answered timestamp
+  // decides this and the position of the outbound row does not.
+  it('counts a photo that arrived mid-flight, even though our reply row sorts after it', () => {
+    const answered = new Date('2026-08-24T10:00:00Z');
+    const msgs = [
+      makeMsg('m1', 'inbound', 'first question', answered),
+      makeMsg('m2', 'inbound', 'here you go', new Date('2026-08-24T10:00:09Z')),
+      // Our reply to m1 only reached the database after m2 had been persisted.
+      makeMsg('m3', 'outbound', 'answer to the first one', new Date('2026-08-24T10:00:10Z')),
+    ];
+    const imgs = new Map([['m2', [img]]]);
+    expect(build(msgs, imgs, answered)).toContain(line(1));
   });
 
   it('reports 0 when a photo was sent but could not be opened', () => {
@@ -249,21 +266,26 @@ describe('buildPrompt photo visibility fact', () => {
   // invite a photo that never arrived, but never ask a client to re-send one we
   // already described.
   it('separates photos never sent from photos already answered', () => {
-    const earlier = (msgs: ConversationContext['recentMessages'], imgs: Map<string, ProcessedImage[]>) =>
-      build(msgs, imgs).match(/- Photos earlier in this conversation, already answered: (\d+)/)?.[1];
+    const earlier = (
+      msgs: ConversationContext['recentMessages'],
+      imgs: Map<string, ProcessedImage[]>,
+      answered: Date | null = null,
+    ) =>
+      build(msgs, imgs, answered).match(/- Photos earlier in this conversation, already answered: (\d+)/)?.[1];
 
     // Nothing ever arrived.
     expect(earlier([makeMsg('m1', 'inbound', 'could i pull this off?')], new Map())).toBe('0');
 
-    // Photo, our reply, then a bare follow-up: visible 0, earlier 1.
+    // Photo answered, then a bare follow-up: visible 0, earlier 1.
+    const t0 = new Date('2026-08-24T10:00:00Z');
     const followUp = [
-      makeMsg('m1', 'inbound', 'thoughts?'),
-      makeMsg('m2', 'outbound', 'love the shape of that fringe'),
-      makeMsg('m3', 'inbound', 'could i pull this off?'),
+      makeMsg('m1', 'inbound', 'thoughts?', t0),
+      makeMsg('m2', 'outbound', 'love the shape of that fringe', new Date('2026-08-24T10:00:05Z')),
+      makeMsg('m3', 'inbound', 'could i pull this off?', new Date('2026-08-24T10:01:00Z')),
     ];
     const imgs = new Map([['m1', [img]]]);
-    expect(build(followUp, imgs)).toContain(line(0));
-    expect(earlier(followUp, imgs)).toBe('1');
+    expect(build(followUp, imgs, t0)).toContain(line(0));
+    expect(earlier(followUp, imgs, t0)).toBe('1');
   });
 
   it('does not double-count the current turn as an earlier photo', () => {
@@ -288,9 +310,14 @@ describe('buildPrompt photo visibility fact', () => {
  * run is one burst in which every question still needs an answer.
  */
 describe('buildPrompt burst size fact', () => {
-  const waiting = (msgs: ConversationContext['recentMessages']) =>
-    buildPrompt({ salon: makeSalon(), ctx: baseCtx(msgs), bookingLinkRecentlySent: false, imagesByMessageId: new Map() })
-      .systemPrompt.match(/- Client messages waiting for this reply: (\d+)/)?.[1];
+  const waiting = (msgs: ConversationContext['recentMessages'], lastAnsweredInboundAt: Date | null = null) =>
+    buildPrompt({
+      salon: makeSalon(),
+      ctx: baseCtx(msgs),
+      bookingLinkRecentlySent: false,
+      imagesByMessageId: new Map(),
+      lastAnsweredInboundAt,
+    }).systemPrompt.match(/- Client messages waiting for this reply: (\d+)/)?.[1];
 
   it('counts a single message as 1', () => {
     expect(waiting([makeMsg('m1', 'inbound', 'hi')])).toBe('1');
@@ -307,20 +334,44 @@ describe('buildPrompt burst size fact', () => {
     ).toBe('3');
   });
 
-  it('resets after our own reply', () => {
+  it('counts only what the last reply did not cover', () => {
+    const q2 = new Date('2026-08-24T10:00:05Z');
     expect(
-      waiting([
-        makeMsg('m1', 'inbound', 'q1'),
-        makeMsg('m2', 'inbound', 'q2'),
-        makeMsg('m3', 'outbound', 'both answered'),
-        makeMsg('m4', 'inbound', 'one more'),
-      ]),
+      waiting(
+        [
+          makeMsg('m1', 'inbound', 'q1', new Date('2026-08-24T10:00:00Z')),
+          makeMsg('m2', 'inbound', 'q2', q2),
+          makeMsg('m3', 'outbound', 'both answered', new Date('2026-08-24T10:00:10Z')),
+          makeMsg('m4', 'inbound', 'one more', new Date('2026-08-24T10:01:00Z')),
+        ],
+        q2,
+      ),
     ).toBe('1');
   });
 
-  it('treats an owner message as the end of the burst, like an outbound one', () => {
-    const owner = { ...makeMsg('m2', 'outbound', 'renata here'), direction: 'owner' as const };
-    expect(waiting([makeMsg('m1', 'inbound', 'q1'), owner, makeMsg('m3', 'inbound', 'q2')])).toBe('1');
+  /**
+   * The bug this predicate exists for. On 2026-08-24 16:49 a client message
+   * arrived while the previous turn was still in flight, so our reply row was
+   * written after it and the window ended on an assistant turn. Walking back to
+   * the nearest outbound returned 0 with a real message waiting, which would have
+   * silently switched off the burst rule in the fast-typing timing that needs it.
+   */
+  it('still counts a message that arrived while the previous turn was in flight', () => {
+    const answered = new Date('2026-08-24T10:00:00Z');
+    expect(
+      waiting(
+        [
+          makeMsg('m1', 'inbound', 'q1', answered),
+          makeMsg('m2', 'inbound', 'q2', new Date('2026-08-24T10:00:09Z')),
+          makeMsg('m3', 'outbound', 'answer to q1 only', new Date('2026-08-24T10:00:10Z')),
+        ],
+        answered,
+      ),
+    ).toBe('1');
+  });
+
+  it('counts the whole window when no reply has ever been recorded', () => {
+    expect(waiting([makeMsg('m1', 'inbound', 'q1'), makeMsg('m2', 'inbound', 'q2')], null)).toBe('2');
   });
 });
 
