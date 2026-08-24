@@ -13,12 +13,6 @@ export const escalateToOwnerTool: ToolDefinition = {
   },
 };
 
-export const markLinkSentTool: ToolDefinition = {
-  name: 'mark_link_sent',
-  description: 'Call right before placing the booking link in the response. Records intent so the link is not repeated next turns.',
-  input_schema: { type: 'object', properties: {} },
-};
-
 export const setStateFlagTool: ToolDefinition = {
   name: 'set_state_flag',
   description: 'Set a per-conversation state flag. Allowed keys: client_is_hesitant, last_quoted_service.',
@@ -32,4 +26,11 @@ export const setStateFlagTool: ToolDefinition = {
   },
 };
 
-export const allTools: ToolDefinition[] = [escalateToOwnerTool, markLinkSentTool, setStateFlagTool];
+// mark_link_sent was removed on 2026-08-24. It was already redundant: the dedup
+// event fires when the sent text contains the booking URL, so the tool only ever
+// duplicated a fact the backend can read off its own outbound message. Keeping it
+// cost a real reply — the model fired it with no text, which forces the corrective
+// retry, and the retry cannot fit under the 30k TPM ceiling alongside the call that
+// preceded it. On 2026-08-23 18:33 a client asked for the link, three 429s exhausted
+// the retries, and the canned fallback went out without the URL in it.
+export const allTools: ToolDefinition[] = [escalateToOwnerTool, setStateFlagTool];

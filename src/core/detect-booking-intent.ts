@@ -1,9 +1,14 @@
 /**
- * Anchored ready-to-book / booking-intent detection for the B4 empty-output link
- * fallback. When the model returns EMPTY reply text on a clear booking message —
- * it fired a tool (e.g. set_state_flag clearing the hesitant flag) but wrote no
- * reply and did not fire mark_link_sent — the backend sends the booking link
- * instead of escalating, so a converting client is never handed to silence.
+ * Anchored booking-intent detection for the empty-output link fallback. When the
+ * model returns EMPTY reply text on a clear booking message — it fired a tool but
+ * wrote nothing — the backend sends the booking link instead of escalating, so a
+ * converting client is never handed to silence.
+ *
+ * Two families count as intent. The first is ready-to-book. The second is asking
+ * for the link again, added 2026-08-24 after a client typed "Could you send it
+ * again", the model wrote no text, and the recovery path did not recognise it, so
+ * what went back was a generic reassurance line. The phrases mirror the ones the
+ * master prompt already lists as an explicit request for the URL.
  *
  * Deliberately ANCHORED phrases, never loose substrings: bare "ready" / "let's
  * do it" collide with non-booking speech ("I'm ready for the bad news, how
@@ -26,6 +31,15 @@ const BOOKING_INTENT_PATTERNS: readonly RegExp[] = [
   /\bi['’]?d (?:like|love) to book\b/i, // "i'd like to book" / "id like to book"
   /\blet'?s book\b/i,
   /\bsign me up\b/i,
+
+  // Asking for the link again. Only reachable when the model wrote nothing at
+  // all, so erring toward sending the URL is the right way to err: the fallback
+  // it replaces says nothing useful to someone who just asked for a link.
+  /\bsend (?:it|that|the link) again\b/i,
+  /\bresend (?:it|that|the link)\b/i,
+  /\b(?:where|which)(?:'?s| is) the link\b/i,
+  /\b(?:can'?t|cannot|do ?n'?t) (?:find|see) (?:the |that |it )?link\b/i,
+  /\bdo ?n'?t see (?:the |a )?link\b/i,
 ];
 
 // Anchored to the END of the look-behind slice, so only a negation that

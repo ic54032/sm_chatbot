@@ -107,7 +107,7 @@ describe('buildPrompt multimodal output', () => {
     });
   });
 
-  it('injects the [photo not received] marker for an unviewable image, keeping the caption (B3)', () => {
+  it('injects the [no image in this message, invite them to send it again] marker for an unviewable image, keeping the caption (B3)', () => {
     const ctx = baseCtx([makeMsg('m1', 'inbound', 'can you fix this?')]);
     const result = buildPrompt({
       salon: makeSalon(),
@@ -116,7 +116,7 @@ describe('buildPrompt multimodal output', () => {
       imagesByMessageId: new Map(), // fetch failed, no processed image
       unviewableImageMessageIds: new Set(['m1']),
     });
-    expect(result.messages[0]).toEqual({ role: 'user', content: 'can you fix this? [photo not received]' });
+    expect(result.messages[0]).toEqual({ role: 'user', content: 'can you fix this? [no image in this message, invite them to send it again]' });
   });
 
   it('marks a captionless unviewable image with just the marker', () => {
@@ -128,7 +128,7 @@ describe('buildPrompt multimodal output', () => {
       imagesByMessageId: new Map(),
       unviewableImageMessageIds: new Set(['m1']),
     });
-    expect(result.messages[0]).toEqual({ role: 'user', content: '[photo not received]' });
+    expect(result.messages[0]).toEqual({ role: 'user', content: '[no image in this message, invite them to send it again]' });
   });
 
   it('includes multiple image blocks before text', () => {
@@ -280,6 +280,119 @@ describe('buildPrompt photo visibility fact', () => {
   });
 });
 
+/**
+ * Three client messages arrived five seconds apart on 2026-08-23 18:24 asking how
+ * long balayage takes, whether the salon takes card, and what parking is like.
+ * All three reached the model in one request and the reply answered the first and
+ * the last. Coalescing and the drain were both correct; nothing said the trailing
+ * run is one burst in which every question still needs an answer.
+ */
+describe('buildPrompt burst size fact', () => {
+  const waiting = (msgs: ConversationContext['recentMessages']) =>
+    buildPrompt({ salon: makeSalon(), ctx: baseCtx(msgs), bookingLinkRecentlySent: false, imagesByMessageId: new Map() })
+      .systemPrompt.match(/- Client messages waiting for this reply: (\d+)/)?.[1];
+
+  it('counts a single message as 1', () => {
+    expect(waiting([makeMsg('m1', 'inbound', 'hi')])).toBe('1');
+  });
+
+  it('counts the whole trailing run of a burst', () => {
+    expect(
+      waiting([
+        makeMsg('m1', 'outbound', 'anything else?'),
+        makeMsg('m2', 'inbound', 'how long does balayage take'),
+        makeMsg('m3', 'inbound', 'do you take card'),
+        makeMsg('m4', 'inbound', 'whats parking like'),
+      ]),
+    ).toBe('3');
+  });
+
+  it('resets after our own reply', () => {
+    expect(
+      waiting([
+        makeMsg('m1', 'inbound', 'q1'),
+        makeMsg('m2', 'inbound', 'q2'),
+        makeMsg('m3', 'outbound', 'both answered'),
+        makeMsg('m4', 'inbound', 'one more'),
+      ]),
+    ).toBe('1');
+  });
+
+  it('treats an owner message as the end of the burst, like an outbound one', () => {
+    const owner = { ...makeMsg('m2', 'outbound', 'renata here'), direction: 'owner' as const };
+    expect(waiting([makeMsg('m1', 'inbound', 'q1'), owner, makeMsg('m3', 'inbound', 'q2')])).toBe('1');
+  });
+});
+
+/**
+ * On Sunday 2026-08-23 at 11:24 Denver time the bot said "not today, but we'll be
+ * open tomorrow from 10am to 7pm". The knowledge base has monday closed and
+ * tuesday 10am to 7pm: it took one day's hours and attached them to another. Both
+ * days are now stated outright so walking the week is not its job.
+ */
+describe('buildPrompt weekday hours facts', () => {
+  const hoursSalon = () => {
+    const salon = makeSalon({ timezone: 'America/Denver' });
+    (salon.sourceOfTruth as unknown as { salon_basics: Record<string, unknown> }).salon_basics = {
+      salon_name: 'Test Salon',
+      owner_first_name: 'Renata',
+      operating_hours: {
+        monday: 'closed',
+        tuesday: '10am to 7pm',
+        wednesday: '10am to 7pm',
+        thursday: '10am to 8pm',
+        friday: '9am to 6pm',
+        saturday: '9am to 5pm',
+        sunday: 'closed',
+      },
+    };
+    return salon;
+  };
+
+  const lines = () =>
+    buildPrompt({
+      salon: hoursSalon(),
+      ctx: baseCtx([makeMsg('m1', 'inbound', 'are you open rn?')]),
+      bookingLinkRecentlySent: false,
+      imagesByMessageId: new Map(),
+    }).stateLines;
+
+  it('states today and tomorrow by weekday name', () => {
+    const out = lines();
+    const today = out.find((l) => l.startsWith('- Today ('));
+    const tomorrow = out.find((l) => l.startsWith('- Tomorrow ('));
+    expect(today).toBeDefined();
+    expect(tomorrow).toBeDefined();
+    // Whatever day the suite runs on, each line must name a real weekday and
+    // carry that day's own value from the knowledge base.
+    const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    for (const line of [today!, tomorrow!]) {
+      const day = /\((\w+)\)/.exec(line)?.[1];
+      expect(days).toContain(day);
+      expect(line).toContain(day === 'monday' || day === 'sunday' ? 'closed' : 'to');
+    }
+  });
+
+  it('wraps from the last day of the week to the first', () => {
+    // Sunday's tomorrow is monday, which is the pairing that produced the bug.
+    const out = lines();
+    const today = /\((\w+)\)/.exec(out.find((l) => l.startsWith('- Today ('))!)?.[1];
+    const tomorrow = /\((\w+)\)/.exec(out.find((l) => l.startsWith('- Tomorrow ('))!)?.[1];
+    const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    expect(tomorrow).toBe(days[(days.indexOf(today!) + 1) % 7]);
+  });
+
+  it('omits both lines when the salon has no operating_hours', () => {
+    const out = buildPrompt({
+      salon: makeSalon({ timezone: 'America/Denver' }),
+      ctx: baseCtx([makeMsg('m1', 'inbound', 'hi')]),
+      bookingLinkRecentlySent: false,
+      imagesByMessageId: new Map(),
+    }).stateLines;
+    expect(out.some((l) => l.startsWith('- Today ('))).toBe(false);
+  });
+});
+
 describe('buildPrompt time awareness', () => {
   const hourMs = 3_600_000;
 
@@ -365,21 +478,21 @@ describe('buildPrompt time awareness', () => {
     it('renders a video-only message as a marker, not an empty string', () => {
       const ctx = baseCtx([media('m1', [{ type: 'video' }]), makeMsg('m2', 'inbound', 'hey did you see it?')]);
       const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
-      expect(result.messages[0].content).toBe('[client sent a video]');
+      expect(result.messages[0].content).toBe('[no text in this message, ask what they are after]');
       expect(result.messages.every((m) => m.content !== '')).toBe(true);
     });
 
     it('renders a voice note and a dropped reel as their own markers', () => {
       const ctx = baseCtx([media('m1', [{ type: 'audio' }]), media('m2', [])]);
       const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
-      expect(result.messages[0].content).toBe('[client sent a voice note]');
-      expect(result.messages[1].content).toBe('[client sent an attachment that did not come through]');
+      expect(result.messages[0].content).toBe('[no text in this message, ask what they are after]');
+      expect(result.messages[1].content).toBe('[no text in this message, ask what they are after]');
     });
 
     it('keeps a caption and appends the marker when both are present', () => {
       const ctx = baseCtx([media('m1', [{ type: 'video' }], 'can you do this?')]);
       const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
-      expect(result.messages[0].content).toBe('can you do this? [client sent a video]');
+      expect(result.messages[0].content).toBe('can you do this? [no text in this message, ask what they are after]');
     });
 
     it('drops a genuinely empty turn entirely rather than emitting empty content', () => {

@@ -6,7 +6,7 @@
  *
  * Scenarios:
  *  1. Current inbound has image + fetch succeeds → LLM gets ContentBlock[] with image block.
- *  2. Current inbound has image + fetch fails → degrade to text-only reply ([photo not received] marker), no escalation, no handoff (B3).
+ *  2. Current inbound has image + fetch fails → degrade to text-only reply ([no image in this message, invite them to send it again] marker), no escalation, no handoff (B3).
  *  3. Historical inbound has image (fetch fails) but current is text-only → log+skip, no escalate, LLM called.
  *  4. salon.config.image_processing.enabled=false + current inbound has image → escalate 'image_processing_disabled', no fetch/LLM.
  *  5. No inbound has images → LLM gets plain string content for every message.
@@ -218,11 +218,11 @@ describe('generateResponse image orchestration', () => {
     // The LLM IS called now (text-only), no escalation, conversation stays alive.
     expect(llm.calls).toHaveLength(1);
     expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
-    // The failed image's message carries the [photo not received] marker so the
+    // The failed image's message carries the [no image in this message, invite them to send it again] marker so the
     // model asks for a resend; it reaches the LLM as plain text (no image block).
     const firstMsg = llm.calls[0].messages[0];
     expect(typeof firstMsg.content).toBe('string');
-    expect(firstMsg.content).toContain('[photo not received]');
+    expect(firstMsg.content).toContain('[no image in this message, invite them to send it again]');
     // and a reply is sent to the client.
     const sent = vi.mocked(deps.ghl.sendMessage).mock.calls.map((c) => c[0].message);
     expect(sent.length).toBeGreaterThanOrEqual(1);

@@ -279,7 +279,6 @@ export async function generateResponse(
   // also empty.
   let llmResult!: Awaited<ReturnType<typeof deps.llm.complete>>;
   let escalationArgs: { reason: string; contextSummary?: string } | undefined;
-  let linkSentToolCalled = false;
   let leakedToolCalls: ReturnType<typeof extractLeakedToolCalls>['calls'] = [];
   let sanitized!: Awaited<ReturnType<typeof sanitize>>;
   let vocabLeakRetried = false;
@@ -291,7 +290,6 @@ export async function generateResponse(
   // Intent recovered on an attempt that produced NO text, carried into the
   // corrective retry (which runs without tools and so cannot re-fire it).
   let carriedEscalationArgs: { reason: string; contextSummary?: string } | undefined;
-  let carriedLinkIntent = false;
   const MAX_EMPTY_RETRIES = 1;
   // How long one llm_failed notification covers. A model outage hits every
   // inbound identically, so without this the owner gets an alert per message.
@@ -320,19 +318,22 @@ export async function generateResponse(
       return;
     }
 
-    // Link intent without the URL — the confirmed 2026-07-10 failure: the model
-    // fires mark_link_sent but writes nothing, so the client got no link at all.
-    if (linkSentToolCalled || containsBookingIntent(lastInbound?.textContent)) {
-      const recentlySent = linkSentToolCalled
-        ? await eventsRepo.recentBookingLinkSent(deps.db, conversationId, salon.config.booking_link_dedup_window_hours)
-        : bookingLinkRecentlySent;
-      const linkMessage = recentlySent
-        ? `the booking link I sent has all the latest openings 🤍`
-        : `here you go 🤍 ${salon.sourceOfTruth.booking.url}`;
-      logger.warn({ conversationId, why, recentlySent }, 'no reply text but booking intent; sending the link');
+    // The client asked to book and the model produced no text at all. Always send
+    // the URL, never a line that merely refers to it.
+    //
+    // This used to branch on the dedup window and send "the booking link I sent
+    // has all the latest openings" whenever the link had gone out recently. That
+    // is the sentence a client got on 2026-08-23 18:33 right after typing "Could
+    // you send it again": a line about a link, with no link in it. The dedup
+    // window exists to stop the bot re-pasting the URL unprompted in ordinary
+    // replies. It was never meant to withhold the link from someone who asked for
+    // it, least of all on the one path that runs only because we have already
+    // failed to write them a reply.
+    if (containsBookingIntent(lastInbound?.textContent)) {
+      logger.warn({ conversationId, why }, 'no reply text but booking intent; sending the link');
       sanitized = {
-        messages: [linkMessage],
-        modifications: [linkSentToolCalled ? 'link_intent_no_text_fallback' : 'booking_intent_no_text_fallback'],
+        messages: [`here you go \u{1F90D} ${salon.sourceOfTruth.booking.url}`],
+        modifications: ['booking_intent_no_text_fallback'],
       };
       return;
     }
@@ -453,9 +454,8 @@ export async function generateResponse(
     // that produced intent but no text. The corrective retry runs with tools
     // disabled, so it cannot re-fire escalate_to_owner or mark_link_sent —
     // dropping the intent there would notify nobody about a refund the client
-    // was already promised, or lose a link the model meant to send.
+    // was already promised.
     escalationArgs = carriedEscalationArgs;
-    linkSentToolCalled = carriedLinkIntent;
 
     // Collect tool intentions. Defer escalate_to_owner execution until AFTER send
     // so the LLM-generated reassurance text (e.g. "let me grab Sarah for you")
@@ -465,8 +465,6 @@ export async function generateResponse(
         const reason = (call.arguments.reason as string | undefined) ?? 'unspecified';
         const summary = call.arguments.context_summary as string | undefined;
         escalationArgs = { reason, contextSummary: summary };
-      } else if (call.name === 'mark_link_sent') {
-        linkSentToolCalled = true;
       } else if (call.name === 'set_state_flag') {
         const key = call.arguments.key as string | undefined;
         const value = call.arguments.value;
@@ -507,8 +505,6 @@ export async function generateResponse(
             contextSummary: typeof rawSummary === 'string' ? rawSummary.slice(0, 300) : undefined,
           };
         }
-      } else if (leaked.name === 'mark_link_sent') {
-        linkSentToolCalled = true;
       } else if (leaked.name === 'set_state_flag') {
         const key =
           typeof leaked.named.key === 'string'
@@ -567,9 +563,8 @@ export async function generateResponse(
         // a refund deserves refund-shaped warmth written by the model.
         if (emptyAttempt < MAX_EMPTY_RETRIES) {
           // Carry the intent: the retry has no tools, so it cannot re-signal an
-          // escalation the client was already promised or a link it meant to send.
+          // escalation the client was already promised.
           carriedEscalationArgs = escalationArgs;
-          carriedLinkIntent = linkSentToolCalled;
           // Corrective retry. forceTextRetry drops native tools on the next attempt
           // so a tool-happy model cannot fire another tool-without-text and MUST
           // write a reply — far more reliable than prose alone. The nudge is worded
@@ -614,7 +609,6 @@ export async function generateResponse(
         // wire a second later and reproducing the 429 that the strip-images fix
         // exists to prevent — only through this door instead.
         carriedEscalationArgs = escalationArgs;
-        carriedLinkIntent = linkSentToolCalled;
         forceTextRetry = true;
         logger.warn(
           { conversationId, matched: vocabLeak, textPreview: sanitized.messages.join(' ').slice(0, 300) },
@@ -701,13 +695,16 @@ export async function generateResponse(
   });
 
   // Record booking_link_sent event AFTER successful send so the dedup window starts
-  // from the next turn, not the current one. Either the LLM declared intent via
-  // mark_link_sent or post-sanitize scan found the link in final output.
+  // from the next turn, not the current one. Read it off the text we actually
+  // sent: if the URL is in there the client has it, and that is the only fact the
+  // dedup window needs. A mark_link_sent tool used to declare the same thing,
+  // which was redundant and also worse — a model that pasted the link but forgot
+  // the tool left the window closed, so the bot re-pasted on the next turn.
   // This runs BEFORE the escalation branch: a turn that both sends the link and
   // escalates must still start the dedup window, or the bot re-pastes the link
   // to the same client once the handoff expires.
   const containsLink = sanitized.messages.some((m) => m.includes(salon.sourceOfTruth.booking.url));
-  if (linkSentToolCalled || containsLink) {
+  if (containsLink) {
     await eventsRepo.insert(deps.db, conversationId, 'booking_link_sent', {});
   }
 

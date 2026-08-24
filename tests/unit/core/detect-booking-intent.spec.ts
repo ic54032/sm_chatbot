@@ -26,6 +26,47 @@ describe('containsBookingIntent — anchored ready-to-book phrases (must MATCH)'
   }
 });
 
+/**
+ * The second intent family: asking for the link again.
+ *
+ * On 2026-08-23 18:33 a client typed "Could you send it again", the model
+ * produced no reply text, and the recovery path did not read that as booking
+ * intent, so what went back was a generic reassurance line instead of the URL
+ * they had just asked for. The phrases mirror the ones the master prompt already
+ * lists as an explicit request for the link.
+ */
+describe('containsBookingIntent — asking for the link again (must match)', () => {
+  const yes = [
+    'Could you send it again',
+    'send it again please',
+    'can you send the link again?',
+    'resend the link',
+    'resend it',
+    'where is the link',
+    "where's the link?",
+    'which is the link',
+    "i can't find the link",
+    'i cant find the link',
+    'i dont see the link',
+    "i don't see a link",
+  ];
+  for (const t of yes) {
+    it(`reads as a request for the link: "${t.slice(0, 40)}"`, () =>
+      expect(containsBookingIntent(t)).toBe(true));
+  }
+});
+
+describe('containsBookingIntent — resend requests that are NOT about the link', () => {
+  const no = [
+    'can you send the photo again', // their own picture, not our link
+    "don't send it again", // negation immediately before
+    'do not resend it',
+  ];
+  for (const t of no) {
+    it(`stays clean: "${t.slice(0, 40)}"`, () => expect(containsBookingIntent(t)).toBe(false));
+  }
+});
+
 describe('containsBookingIntent — non-booking / negated / deferred (must NOT match)', () => {
   const no = [
     '',

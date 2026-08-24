@@ -278,19 +278,31 @@ describe('generateResponse — empty-output retry', () => {
     expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'booking_link_sent', {});
   });
 
-  it('empty text + mark_link_sent when link was already sent recently sends a nudge (no re-pasted URL)', async () => {
-    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx("i'd book"));
+  /**
+   * The dedup window must never withhold the URL on this path.
+   *
+   * This test used to assert the opposite, and the behaviour it locked in reached
+   * a real client: on 2026-08-23 18:33 someone typed "Could you send it again",
+   * the model produced no text, the link had gone out recently, and what went
+   * back was "the booking link I sent has all the latest openings" — a sentence
+   * about a link, containing no link.
+   *
+   * The dedup window exists to stop the bot re-pasting the URL unprompted in
+   * ordinary replies. This path only runs because we already failed to write the
+   * client a reply, so there is nothing here worth protecting them from.
+   */
+  it('empty text + booking intent sends the URL even when the link went out recently', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('could you send it again'));
     vi.mocked(eventsRepo.recentBookingLinkSent).mockResolvedValue(true);
     const llm = new FakeLlmClient();
-    llm.stage({ match: () => true, output: { text: '', toolCalls: [{ name: 'mark_link_sent', arguments: {} }] } });
+    llm.stage({ match: () => true, output: { text: '', toolCalls: [{ name: 'set_state_flag', arguments: { key: 'client_is_hesitant', value: true } }] } });
     const ghl = makeGhl();
 
     await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
 
     const sent = vi.mocked(ghl.sendMessage).mock.calls.map((c) => c[0].message);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).not.toContain('https://lumenhairstudio.glossgenius.com/book');
-    expect(sent[0].toLowerCase()).toContain('link');
+    expect(sent[0]).toContain('https://lumenhairstudio.glossgenius.com/book');
     expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
   });
 

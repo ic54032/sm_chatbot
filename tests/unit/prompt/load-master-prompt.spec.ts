@@ -54,11 +54,12 @@ describe('loadMasterPrompt', () => {
     expect(prompt).toContain('Never reuse your own phrasing'); // 4.7a
     expect(prompt).toContain('Hi there,'); // 4.7a banned opener family
     expect(prompt).toContain('Start EVERY sentence lowercase'); // 4.8
-    expect(prompt).toContain('The redirect is only half the rule'); // 4.3 video admission
-    // The three media markers the backend can now inject (Section 8).
-    expect(prompt).toContain('[client sent a video]');
-    expect(prompt).toContain('[client sent a voice note]');
-    expect(prompt).toContain('[client sent an attachment that did not come through]');
+    expect(prompt).toContain('Your own senses are never the subject of a reply'); // 4.3 video admission
+    // The two media markers the backend injects (Section 8). Three markers naming
+    // a medium became two naming an action on 2026-08-24; the medium was what
+    // triggered the bot admitting a limitation.
+    expect(prompt).toContain('[no text in this message, ask what they are after]');
+    expect(prompt).toContain('[no image in this message, invite them to send it again]');
   });
 
   it('contains the QA Round 3 behavior fixes', () => {
@@ -189,6 +190,57 @@ describe('loadMasterPrompt', () => {
       expect(prompt).not.toContain(praise);
     }
     expect(prompt).toContain('Praising the thing sounds warm and costs nothing');
+  });
+
+  /**
+   * The admission family must not appear ANYWHERE, Bad lines included.
+   *
+   * This is the inverse of the guard above, and the reason is a finding from
+   * 2026-08-23: production shipped "can't view videos directly, but tell me what
+   * you're going for", which is a paraphrase of what was then the prompt's own
+   * BAD example, down to the "but" that the rule two lines above it forbade.
+   *
+   * A BAD example is safe when the error is structural and the GOOD side is
+   * written as behaviour, which is why the consult-objection pair works. It is
+   * dangerous when the BAD side is a fluent sentence in the bot's own voice,
+   * because the model copies fluent sentences regardless of the label.
+   */
+  it('never shows the model a sentence that admits a limitation', () => {
+    const prompt = loadMasterPrompt();
+    for (const phrase of [
+      "didn't receive",
+      'did not receive',
+      "can't watch",
+      "can't view",
+      "can't listen",
+      "can't hear",
+      'only see text',
+      'set up just for text',
+    ]) {
+      expect(prompt.toLowerCase()).not.toContain(phrase.toLowerCase());
+    }
+  });
+
+  it('names no media type in the markers it tells the model to expect', () => {
+    // The markers themselves were rewritten to name no medium; the prompt must
+    // not reintroduce one by listing the old wording.
+    const prompt = loadMasterPrompt();
+    expect(prompt).toContain('[no text in this message, ask what they are after]');
+    expect(prompt).toContain('[no image in this message, invite them to send it again]');
+    expect(prompt).not.toContain('[client sent a video]');
+    expect(prompt).not.toContain('[client sent a voice note]');
+  });
+
+  it('tells the model a burst of client messages needs every question answered', () => {
+    const prompt = loadMasterPrompt();
+    expect(prompt).toContain('Client messages waiting for this reply');
+    expect(prompt).toContain('ONE burst');
+  });
+
+  it('tells the model to trust the injected weekday hours over its own reasoning', () => {
+    const prompt = loadMasterPrompt();
+    expect(prompt).toContain('Tomorrow (...) hours');
+    expect(prompt).toContain('never name a day as open unless its own line says so');
   });
 
   it('contains the heart emoji, not the mojibake artifact', () => {

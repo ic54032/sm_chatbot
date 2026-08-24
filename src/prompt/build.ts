@@ -2,7 +2,7 @@ import type { Salon, ConversationContext } from '../core/types.js';
 import type { ContentBlock } from '../llm/client.js';
 import type { ProcessedImage } from '../images/process.js';
 import { loadMasterPrompt } from './load-master-prompt.js';
-import { mediaMarkerFor, MARKER_PHOTO_FAILED } from './media-marker.js';
+import { mediaMarkerFor, MARKER_NO_IMAGE } from './media-marker.js';
 
 export interface BuildPromptInput {
   salon: Salon;
@@ -62,12 +62,22 @@ Paste it exactly, character for character, whenever you share it. Never paraphra
   // history. Four prompt rules forbidding that did not hold — a 52KB prompt has
   // too much competing for attention — but the model demonstrably does read and
   // obey this state block, which is how the booking-link dedup works.
+  //
+  // The same walk also counts the messages themselves. Three client messages
+  // arrived five seconds apart on 2026-08-23 18:24 asking how long balayage
+  // takes, whether the salon takes card, and what parking is like. All three
+  // reached the model in one request (messageShapes idx 12, 13, 14) and the reply
+  // answered the first and the last. Coalescing and the drain were both correct;
+  // nothing told the model that a trailing run of client messages is one burst in
+  // which every question still needs an answer.
   let visiblePhotos = 0;
+  let waitingMessages = 0;
   let i = ctx.recentMessages.length - 1;
   for (; i >= 0; i--) {
     const m = ctx.recentMessages[i];
     if (m.direction !== 'inbound') break; // stop at our own last reply
     visiblePhotos += imagesByMessageId.get(m.id)?.length ?? 0;
+    waitingMessages += 1;
   }
 
   // Photos from EARLIER turns, the ones we have already replied to. Without this
@@ -84,6 +94,7 @@ Paste it exactly, character for character, whenever you share it. Never paraphra
   const stateLines = [
     `- Booking link sent recently (within last ${salon.config.booking_link_dedup_window_hours}h): ${bookingLinkRecentlySent}`,
     `- Total inbound messages this conversation: ${inboundCount}`,
+    `- Client messages waiting for this reply: ${waitingMessages}`,
     `- Photos visible to you this turn: ${visiblePhotos}`,
     `- Photos earlier in this conversation, already answered: ${answeredPhotos}`,
     `- State flags JSON: ${JSON.stringify(state)}`,
@@ -104,6 +115,31 @@ Paste it exactly, character for character, whenever you share it. Never paraphra
         hour12: true,
       }).format(new Date());
       stateLines.push(`- Current date and time (salon local): ${nowLocal}`);
+
+      // Today's and tomorrow's hours, read straight out of the knowledge base.
+      //
+      // On Sunday 2026-08-23 at 11:24 Denver time the bot said "not today, but
+      // we'll be open tomorrow from 10am to 7pm". The knowledge base has
+      // monday: "closed" and tuesday: "10am to 7pm" — it took Tuesday's hours and
+      // attached them to Monday. Every fact it needed was already in front of it;
+      // what it got wrong was walking the week. So the walk stops being its job.
+      //
+      // Two lookups, no parsing of "10am to 7pm" and no arithmetic. "Are you open
+      // right now" then reduces to comparing the clock above against one short
+      // string, instead of reasoning across seven days.
+      const weekday = (d: Date) =>
+        new Intl.DateTimeFormat('en-US', { timeZone: salon.config.timezone, weekday: 'long' })
+          .format(d)
+          .toLowerCase();
+      const hours = (sot as { salon_basics?: { operating_hours?: Record<string, unknown> } }).salon_basics
+        ?.operating_hours;
+      if (hours) {
+        const today = weekday(new Date());
+        const tomorrow = weekday(new Date(Date.now() + 86_400_000));
+        const read = (day: string) => (typeof hours[day] === 'string' ? (hours[day] as string) : 'not listed');
+        stateLines.push(`- Today (${today}) hours: ${read(today)}`);
+        stateLines.push(`- Tomorrow (${tomorrow}) hours: ${read(tomorrow)}`);
+      }
     } catch {
       // Invalid IANA name in config — omit the line (prompt handles absence)
       // rather than killing the whole response.
@@ -135,7 +171,7 @@ ${JSON.stringify(sot, null, 2)}`;
         // marker routes the model to its attachment-not-visible behavior (ask
         // for a resend warmly, no technical excuse). Any caption is kept.
         const caption = m.textContent ? `${m.textContent} ` : '';
-        messages.push({ role: 'user', content: `${caption}${MARKER_PHOTO_FAILED}` });
+        messages.push({ role: 'user', content: `${caption}${MARKER_NO_IMAGE}` });
       } else {
         // A media-only message (video, voice note, shared reel, view-once) has
         // no text. Emitting "" here would produce an API-invalid empty content

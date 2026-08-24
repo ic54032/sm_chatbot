@@ -183,7 +183,16 @@ describe('generateResponse — leaked tool-call text recovery', () => {
     expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'booking_link_sent', {});
   });
 
-  it('leaked [mark_link_sent()] without the URL in text still records the booking_link_sent event', async () => {
+  /**
+   * The dedup window opens on the URL actually being sent, nothing else.
+   *
+   * This used to assert that a leaked [mark_link_sent()] opened the window even
+   * with no URL in the text, which had it backwards: the client never received a
+   * link, so a window that suppresses the next one only hides the link further.
+   * mark_link_sent was removed on 2026-08-24 and the bracket is now just noise
+   * for the extractor to strip.
+   */
+  it('leaked [mark_link_sent()] without the URL in text records NO booking_link_sent event', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('ok'));
     const llm = new FakeLlmClient();
     llm.stage({
@@ -193,7 +202,12 @@ describe('generateResponse — leaked tool-call text recovery', () => {
     const ghl = makeGhl();
     await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
 
-    expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'booking_link_sent', {});
+    expect(vi.mocked(eventsRepo.insert)).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      'booking_link_sent',
+      {},
+    );
   });
 
   it('leaked [set_state_flag(...)] with an allowed key merges state', async () => {
@@ -313,7 +327,7 @@ describe('generateResponse — leaked tool-call text recovery', () => {
     const llm = new FakeLlmClient();
     llm.stage({
       match: () => true,
-      output: { text: "she'll jump in shortly to help 🤍\n[mark_link_sent()]", toolCalls: [] },
+      output: { text: "she'll jump in shortly to help 🤍\n[set_state_flag(\"client_is_hesitant\", true)]", toolCalls: [] },
     });
     const ghl = makeGhl();
     await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
@@ -324,8 +338,6 @@ describe('generateResponse — leaked tool-call text recovery', () => {
       'implied_handoff_no_tool_call',
       expect.not.stringContaining('['),
     );
-    // The leaked mark_link_sent intent is still honored before the escalation
-    expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'booking_link_sent', {});
   });
 
   it('leaked escalate with NO parseable args falls back to reason "unspecified"', async () => {
