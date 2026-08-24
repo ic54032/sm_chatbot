@@ -22,7 +22,7 @@
  * terminal punctuation or nothing at all.
  */
 const BANNED_OPENERS =
-  /^(absolutely|certainly|of course|indeed|perfect|amazing|wonderful|fantastic|great|sure thing|thanks for reaching out|hi there|hey there|hello there)(?=\s*[,!.]|\s*$)[,!.\s]*/i;
+  /^(absolutely|certainly|of course|indeed|perfect|amazing|wonderful|fantastic|great|sure thing|thanks for reaching out|thanks for sharing|hi there|hey there|hello there)(?=\s*[,!.]|\s*$)[,!.\s]*/i;
 
 /** Words that legitimately keep their capital at the start of a sentence. */
 const ALWAYS_CAPITAL = new Set(['i']);

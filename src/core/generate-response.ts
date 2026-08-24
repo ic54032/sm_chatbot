@@ -256,7 +256,16 @@ export async function generateResponse(
     };
   });
   logger.info(
-    { conversationId, llmModel: salon.config.llm_model ?? deps.defaultLlmModel, messageShapes },
+    {
+      conversationId,
+      llmModel: salon.config.llm_model ?? deps.defaultLlmModel,
+      messageShapes,
+      // The state block decides most of the behaviour we get asked about — the
+      // photo count, the link dedup, the salon-local clock. Reading it out of a
+      // reply after the fact is guesswork, so it goes in the log next to the
+      // shapes it explains.
+      stateLines: prompt.stateLines,
+    },
     'llm call composition debug',
   );
 

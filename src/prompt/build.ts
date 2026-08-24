@@ -17,6 +17,11 @@ export interface BuildPromptInput {
 export interface BuildPromptOutput {
   systemPrompt: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string | ContentBlock[] }>;
+  /** The "# Conversation state" lines, handed back so the caller can log them.
+   * Every behaviour question this week turned on a value in this block, and none
+   * of them were visible in production logs — the photo-count diagnosis took a
+   * day of reconstructing arithmetic that one log line would have answered. */
+  stateLines: string[];
 }
 
 /**
@@ -148,5 +153,5 @@ ${JSON.stringify(sot, null, 2)}`;
     }
   }
 
-  return { systemPrompt, messages };
+  return { systemPrompt, messages, stateLines };
 }
