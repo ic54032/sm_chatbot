@@ -223,10 +223,14 @@ ${JSON.stringify(sot, null, 2)}`;
       const blocks: ContentBlock[] = burstEntries.flatMap((b) =>
         b.images.map((img): ContentBlock => ({ type: 'image', mediaType: img.mediaType, base64: img.base64 })),
       );
-      const lines = burstEntries.map(
-        (b, i) => `${i + 1}. ${b.body || '[the photo above]'}`,
-      );
-      const text = `The client sent ${lines.length} messages, answer every one of them:\n${lines.join('\n')}`;
+      // Bullets rather than numbers, deliberately. Numbering the input taught the
+      // model to number its reply: production 2026-08-25 13:17 came back as
+      // "1. ... 2. ... 3. ... 4." and the splitter left a bare "4." dangling at the
+      // end of a bubble when the last answer moved to the next one. A bullet is a
+      // weaker thing to mirror, and if it does get mirrored the markdown pass has
+      // stripped list markers from replies since it was written.
+      const lines = burstEntries.map((b) => `- ${b.body || '[the photo above]'}`);
+      const text = `The client sent ${lines.length} messages. Answer every one of them, in plain sentences with no list:\n${lines.join('\n')}`;
       messages.push({ role: 'user', content: blocks.length > 0 ? [...blocks, { type: 'text', text }] : text });
       continue;
     }

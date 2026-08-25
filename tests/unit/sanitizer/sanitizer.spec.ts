@@ -6,6 +6,70 @@ const baseCtx = {
   policy: { maxWordsPerMessage: 40, maxEmojis: 2 },
 };
 
+/**
+ * What a client actually received on 2026-08-25 13:17, after asking four things
+ * in one burst:
+ *
+ *   "1. balayage usually takes about 3 to 4 hours ... 2. yes, a card on file ...
+ *    3. parking is free on Pearl ... 4."
+ *
+ * Two defects in one message. The model mirrored the numbered list it had been
+ * given, and the sentence splitter then read the bare "4." as a finished sentence
+ * and left it dangling at the end of the bubble while its answer moved to the
+ * next one. The blank lines the model had put between answers were also flattened
+ * into spaces before the splitter ever saw them, so four answers arrived as a
+ * wall of text instead of separate bubbles.
+ */
+describe('sanitizer — burst replies', () => {
+  const burstCtx = { ...baseCtx, policy: { ...baseCtx.policy, maxMessages: 4 } };
+
+  it('makes one bubble per answer when the model separates them with blank lines', async () => {
+    const raw = 'balayage takes about 3 to 4 hours.\n\nyes, we take card.\n\nparking is free on Pearl after 6pm.';
+    const result = await sanitize(raw, burstCtx);
+    expect(result.messages).toHaveLength(3);
+    expect(result.messages[0]).toContain('3 to 4 hours');
+    expect(result.messages[1]).toContain('card');
+    expect(result.messages[2]).toContain('parking');
+    expect(result.modifications).toContain('split_on_paragraphs');
+  });
+
+  it('strips a mirrored list marker from the front of each bubble', async () => {
+    const raw = '1. balayage takes about 3 to 4 hours.\n\n2. yes, we take card.';
+    const result = await sanitize(raw, burstCtx);
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]).toBe('balayage takes about 3 to 4 hours.');
+    expect(result.messages[1]).toBe('yes, we take card.');
+    expect(result.modifications).toContain('list_markers_stripped');
+  });
+
+  it('drops a bubble that is nothing but a dangling number', async () => {
+    const raw = 'parking is free on Pearl after 6pm.\n\n4.';
+    const result = await sanitize(raw, burstCtx);
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toBe('parking is free on Pearl after 6pm.');
+  });
+
+  it('leaves a decimal and a price alone', async () => {
+    // "3." only counts as a marker when a space follows it, so 3.5 is safe, and a
+    // price never matches at all.
+    const result = await sanitize('3.5 hours is typical, and it starts at $220.', burstCtx);
+    expect(result.messages[0]).toBe('3.5 hours is typical, and it starts at $220.');
+  });
+
+  it('still collapses a single stray newline inside one answer', async () => {
+    const result = await sanitize('balayage takes\nabout 3 to 4 hours.', burstCtx);
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toBe('balayage takes about 3 to 4 hours.');
+  });
+
+  it('falls back to word counting when there are more paragraphs than bubbles', async () => {
+    const raw = 'one.\n\ntwo.\n\nthree.\n\nfour.\n\nfive.';
+    const result = await sanitize(raw, { ...baseCtx, policy: { ...baseCtx.policy, maxMessages: 2 } });
+    expect(result.messages.length).toBeLessThanOrEqual(2);
+    expect(result.messages.join(' ')).toContain('five');
+  });
+});
+
 describe('sanitizer — forbidden chars', () => {
   it('replaces em-dash with a comma, absorbing the spaces around it', async () => {
     // Input avoids a banned opener so this test measures the dash only.

@@ -405,7 +405,7 @@ describe('buildPrompt burst merging', () => {
     expect(out.messages[0].content).toBe('how long does balayage take');
   });
 
-  it('merges three questions into one numbered turn', () => {
+  it('merges three questions into one bulleted turn', () => {
     const out = build([
       makeMsg('m1', 'inbound', 'how long is blayage apointment'),
       makeMsg('m2', 'inbound', 'do you take card'),
@@ -413,10 +413,13 @@ describe('buildPrompt burst merging', () => {
     ]);
     expect(out.messages).toHaveLength(1);
     const text = out.messages[0].content as string;
-    expect(text).toContain('answer every one of them');
-    expect(text).toContain('1. how long is blayage apointment');
-    expect(text).toContain('2. do you take card');
-    expect(text).toContain('3. is parking ok there');
+    expect(text).toContain('Answer every one of them');
+    expect(text).toContain('- how long is blayage apointment');
+    expect(text).toContain('- do you take card');
+    expect(text).toContain('- is parking ok there');
+    // Numbers are deliberately absent: numbering the input taught the model to
+    // number its reply, and the splitter then stranded a bare "4." in a bubble.
+    expect(text).not.toMatch(/^\s*\d+\./m);
     expect(out.waitingMessages).toBe(3);
   });
 
@@ -435,8 +438,8 @@ describe('buildPrompt burst merging', () => {
     expect(out.messages[0].content).toBe('first, already answered');
     expect(out.messages[1]).toEqual({ role: 'assistant', content: 'here you go' });
     const merged = out.messages[2].content as string;
-    expect(merged).toContain('1. second');
-    expect(merged).toContain('2. third');
+    expect(merged).toContain('- second');
+    expect(merged).toContain('- third');
     expect(merged).not.toContain('already answered');
   });
 
@@ -451,8 +454,8 @@ describe('buildPrompt burst merging', () => {
     const content = out.messages[0].content as Array<{ type: string; text?: string }>;
     expect(content[0].type).toBe('image');
     expect(content[1].type).toBe('text');
-    expect(content[1].text).toContain('1. this is the look');
-    expect(content[1].text).toContain('2. could i pull it off?');
+    expect(content[1].text).toContain('- this is the look');
+    expect(content[1].text).toContain('- could i pull it off?');
   });
 
   it('reports the bubble budget so the reply can answer each one separately', () => {
@@ -623,8 +626,8 @@ describe('buildPrompt time awareness', () => {
       const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
       expect(result.messages).toHaveLength(1);
       const content = result.messages[0].content as string;
-      expect(content).toContain('1. [no text in this message, ask what they are after]');
-      expect(content).toContain('2. [no text in this message, ask what they are after]');
+      expect(content).toContain('- [no text in this message, ask what they are after]');
+      expect(content.match(/- \[no text/g) ?? []).toHaveLength(2);
       expect(result.messages.every((m) => m.content !== '')).toBe(true);
     });
 

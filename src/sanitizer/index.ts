@@ -80,8 +80,19 @@ export async function sanitize(raw: string, ctx: SanitizeContext): Promise<Sanit
     .replace(/\s*[—–]\s*/g, ', ')
     .replace(/[…]/g, '')
     .replace(/;/g, ',')
-    .replace(/\s+/g, ' ')
+    // Collapse runs of whitespace WITHOUT flattening a blank line. A blank line is
+    // the model telling us where one answer ends and the next begins, and the
+    // splitter below turns that into a separate bubble. Flattening it here is why
+    // four answers arrived as one wall of text on 2026-08-25.
+    .replace(/[^\S\r\n]+/g, ' ')
     .trim();
+  // Paragraphs survive, everything inside one becomes a single line. Note this
+  // cannot use \u0000 as a marker: the URL masking above already owns that byte.
+  text = text
+    .split(/\n{2,}/)
+    .map((p) => p.replace(/\s*\n\s*/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n\n');
   if (text !== beforeScrub) mods.push('forbidden_chars_scrubbed');
 
   // 3b. Style rules the prompt keeps losing (QA Round 3, items 5.3 and 5.4).
@@ -131,15 +142,30 @@ export async function sanitize(raw: string, ctx: SanitizeContext): Promise<Sanit
     mods.push('emojis_capped');
   }
 
-  // 8. Word-count split.
+  // 8. Split into bubbles. A blank line is the model's own answer boundary, so it
+  // wins over word counting when it is there and fits the budget.
+  const maxMessages = ctx.policy.maxMessages ?? 2;
+  const paragraphs = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
   const words = text.split(/\s+/).filter(Boolean);
   let messages: string[];
-  if (words.length <= ctx.policy.maxWordsPerMessage) {
-    messages = [text];
+  if (paragraphs.length > 1 && paragraphs.length <= maxMessages) {
+    messages = paragraphs;
+    mods.push('split_on_paragraphs');
+  } else if (words.length <= ctx.policy.maxWordsPerMessage) {
+    messages = [text.replace(/\n+/g, ' ')];
   } else {
-    messages = splitOnSentenceBoundaries(text, ctx.policy.maxWordsPerMessage, ctx.policy.maxMessages ?? 2);
+    messages = splitOnSentenceBoundaries(text.replace(/\n+/g, ' '), ctx.policy.maxWordsPerMessage, maxMessages);
     mods.push('split_into_multiple');
   }
+
+  // A reply that mirrors the numbered or bulleted shape of its input gets the
+  // marker taken off each bubble. A bubble that was ONLY a marker (the dangling
+  // "4." that shipped on 2026-08-25) disappears with it. Two digits at most, and a
+  // space is required after the dot, so "3.5 hours" and "$220" are untouched.
+  const beforeEnum = messages.join('\u0000');
+  messages = messages.map((m) => m.replace(/^\s*(?:\d{1,2}[.)]|[-*+])\s+/, '').trim()).filter(Boolean);
+  messages = messages.filter((m) => !/^\s*(?:\d{1,2}[.)]|[-*+])\s*$/.test(m));
+  if (messages.join('\u0000') !== beforeEnum) mods.push('list_markers_stripped');
 
   // 8b. Restore URLs, now that the splitter can no longer break them apart.
   messages = messages.map((m) => {
