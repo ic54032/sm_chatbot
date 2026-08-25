@@ -259,9 +259,13 @@ describe('generateResponse image orchestration', () => {
     // LLM was called
     expect(llm.calls).toHaveLength(1);
     const msgs = llm.calls[0].messages;
-    // m1's content is a string (image skipped due to fetch fail) and m2 likewise
+    // Both messages are still unanswered, so they merge into one enumerated turn.
+    // The point of this assertion survives the merge: with the fetch failed there
+    // are no image blocks, so the turn is plain text rather than multimodal.
+    expect(msgs).toHaveLength(1);
     expect(typeof msgs[0].content).toBe('string');
-    expect(typeof msgs[1].content).toBe('string');
+    expect(msgs[0].content as string).toContain('remember this?');
+    expect(msgs[0].content as string).toContain('still thinking about it');
   });
 
   it('escalates with image_processing_disabled when salon image_processing.enabled is false and inbound has image', async () => {

@@ -21,6 +21,10 @@ export interface BuildPromptInput {
 export interface BuildPromptOutput {
   systemPrompt: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string | ContentBlock[] }>;
+  /** How many client messages this reply owes an answer to. The caller lets the
+   * reply use one bubble per message, so three questions can come back as three
+   * short answers instead of one paragraph carrying all of them. */
+  waitingMessages: number;
   /** The "# Conversation state" lines, handed back so the caller can log them.
    * Every behaviour question this week turned on a value in this block, and none
    * of them were visible in production logs — the photo-count diagnosis took a
@@ -175,8 +179,58 @@ ${JSON.stringify(sot, null, 2)}`;
 
   const systemPrompt = [bookingHeader, loadMasterPrompt(), conversationState, knowledgeBase].join('\n\n');
 
+  // Everything the client has said since our last reply goes into ONE turn, as a
+  // numbered list, whenever there is more than one of them.
+  //
+  // Stating the count as a fact was not enough. On 2026-08-25 12:54 three
+  // questions arrived, all three reached the model, the state block correctly read
+  // "waiting for this reply: 3", and the reply answered the first one only. The
+  // number was right in front of it and the rule reading that number did not hold,
+  // which is the sixth time prose has lost an argument with this prompt.
+  //
+  // So the shape changes instead of the wording. Skipping the middle of three
+  // consecutive user turns is a positional effect and a count does nothing about
+  // it; skipping item 2 of a numbered list inside a single turn is a different and
+  // much more visible act. The backend does the numbering, so there is nothing for
+  // the model to get right first.
+  // Render each unanswered message once, then keep only the ones with something to
+  // show. A message with no text, no marker and no pixels is dropped rather than
+  // labelled: inventing a description for an empty turn would be a fabrication,
+  // and an empty content block is rejected outright by the API.
+  const burst = (waitingMessages > 1 ? ctx.recentMessages.filter(isUnanswered) : []).map((m) => {
+    const images = imagesByMessageId.get(m.id) ?? [];
+    const marker = images.length
+      ? null
+      : unviewableImageMessageIds?.has(m.id)
+        ? MARKER_NO_IMAGE
+        : mediaMarkerFor(m);
+    return { id: m.id, images, body: [m.textContent, marker].filter(Boolean).join(' ').trim() };
+  });
+  const burstEntries = burst.filter((b) => b.body || b.images.length > 0);
+
+  // One entry left after filtering is not a burst, so it renders normally below.
+  const burstIds = new Set(burstEntries.length > 1 ? burstEntries.map((b) => b.id) : []);
+
   const messages: BuildPromptOutput['messages'] = [];
+  let burstDone = false;
   for (const m of ctx.recentMessages) {
+    if (burstIds.has(m.id)) {
+      if (burstDone) continue; // the whole burst is emitted once, at its first message
+      burstDone = true;
+
+      // Images from anywhere in the burst come first, then one text block. A photo
+      // sent as part of a burst must not be lost to the merge.
+      const blocks: ContentBlock[] = burstEntries.flatMap((b) =>
+        b.images.map((img): ContentBlock => ({ type: 'image', mediaType: img.mediaType, base64: img.base64 })),
+      );
+      const lines = burstEntries.map(
+        (b, i) => `${i + 1}. ${b.body || '[the photo above]'}`,
+      );
+      const text = `The client sent ${lines.length} messages, answer every one of them:\n${lines.join('\n')}`;
+      messages.push({ role: 'user', content: blocks.length > 0 ? [...blocks, { type: 'text', text }] : text });
+      continue;
+    }
+
     if (m.direction === 'inbound') {
       const imgs = imagesByMessageId.get(m.id);
       if (imgs && imgs.length > 0) {
@@ -207,5 +261,5 @@ ${JSON.stringify(sot, null, 2)}`;
     }
   }
 
-  return { systemPrompt, messages, stateLines };
+  return { systemPrompt, messages, stateLines, waitingMessages };
 }

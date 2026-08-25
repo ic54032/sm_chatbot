@@ -381,6 +381,88 @@ describe('buildPrompt burst size fact', () => {
  * tuesday 10am to 7pm: it took one day's hours and attached them to another. Both
  * days are now stated outright so walking the week is not its job.
  */
+/**
+ * Merging the burst into one enumerated turn is the SECOND attempt at this.
+ *
+ * The first stated the count as a fact in the state block and left the shape
+ * alone. On 2026-08-25 12:54 three questions arrived, all three reached the model,
+ * the block correctly read "waiting for this reply: 3", and the reply answered the
+ * first one only. Skipping the middle of three consecutive user turns is a
+ * positional effect, and a number does nothing about it. Skipping item 2 of a
+ * numbered list inside one turn is a different and far more visible act.
+ */
+describe('buildPrompt burst merging', () => {
+  const build = (
+    msgs: ConversationContext['recentMessages'],
+    imgs: Map<string, ProcessedImage[]> = new Map(),
+    lastAnsweredInboundAt: Date | null = null,
+  ) =>
+    buildPrompt({ salon: makeSalon(), ctx: baseCtx(msgs), bookingLinkRecentlySent: false, imagesByMessageId: imgs, lastAnsweredInboundAt });
+
+  it('leaves a single message exactly as it was', () => {
+    const out = build([makeMsg('m1', 'inbound', 'how long does balayage take')]);
+    expect(out.messages).toHaveLength(1);
+    expect(out.messages[0].content).toBe('how long does balayage take');
+  });
+
+  it('merges three questions into one numbered turn', () => {
+    const out = build([
+      makeMsg('m1', 'inbound', 'how long is blayage apointment'),
+      makeMsg('m2', 'inbound', 'do you take card'),
+      makeMsg('m3', 'inbound', 'is parking ok there'),
+    ]);
+    expect(out.messages).toHaveLength(1);
+    const text = out.messages[0].content as string;
+    expect(text).toContain('answer every one of them');
+    expect(text).toContain('1. how long is blayage apointment');
+    expect(text).toContain('2. do you take card');
+    expect(text).toContain('3. is parking ok there');
+    expect(out.waitingMessages).toBe(3);
+  });
+
+  it('does not touch messages an earlier reply already answered', () => {
+    const t0 = new Date('2026-08-25T10:00:00Z');
+    const out = build(
+      [
+        makeMsg('m1', 'inbound', 'first, already answered', t0),
+        makeMsg('m2', 'outbound', 'here you go', new Date('2026-08-25T10:00:05Z')),
+        makeMsg('m3', 'inbound', 'second', new Date('2026-08-25T10:01:00Z')),
+        makeMsg('m4', 'inbound', 'third', new Date('2026-08-25T10:01:02Z')),
+      ],
+      new Map(),
+      t0,
+    );
+    expect(out.messages[0].content).toBe('first, already answered');
+    expect(out.messages[1]).toEqual({ role: 'assistant', content: 'here you go' });
+    const merged = out.messages[2].content as string;
+    expect(merged).toContain('1. second');
+    expect(merged).toContain('2. third');
+    expect(merged).not.toContain('already answered');
+  });
+
+  // A photo inside a burst must survive the merge, or the fix for one bug
+  // reintroduces the "bot cannot see the photo" bug it was built alongside.
+  it('keeps image blocks when one message in the burst carried a photo', () => {
+    const out = build(
+      [makeMsg('m1', 'inbound', 'this is the look'), makeMsg('m2', 'inbound', 'could i pull it off?')],
+      new Map([['m1', [img]]]),
+    );
+    expect(out.messages).toHaveLength(1);
+    const content = out.messages[0].content as Array<{ type: string; text?: string }>;
+    expect(content[0].type).toBe('image');
+    expect(content[1].type).toBe('text');
+    expect(content[1].text).toContain('1. this is the look');
+    expect(content[1].text).toContain('2. could i pull it off?');
+  });
+
+  it('reports the bubble budget so the reply can answer each one separately', () => {
+    expect(build([makeMsg('m1', 'inbound', 'one')]).waitingMessages).toBe(1);
+    expect(
+      build([makeMsg('m1', 'inbound', 'one'), makeMsg('m2', 'inbound', 'two')]).waitingMessages,
+    ).toBe(2);
+  });
+});
+
 describe('buildPrompt weekday hours facts', () => {
   const hoursSalon = () => {
     const salon = makeSalon({ timezone: 'America/Denver' });
@@ -526,18 +608,24 @@ describe('buildPrompt time awareness', () => {
       rawContent: { attachments: atts },
     });
 
-    it('renders a video-only message as a marker, not an empty string', () => {
-      const ctx = baseCtx([media('m1', [{ type: 'video' }]), makeMsg('m2', 'inbound', 'hey did you see it?')]);
+    it('renders a lone video-only message as a marker, not an empty string', () => {
+      const ctx = baseCtx([media('m1', [{ type: 'video' }])]);
       const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
       expect(result.messages[0].content).toBe('[no text in this message, ask what they are after]');
       expect(result.messages.every((m) => m.content !== '')).toBe(true);
     });
 
-    it('renders a voice note and a dropped reel as their own markers', () => {
+    // Two unanswered messages merge into one enumerated turn, so the markers now
+    // appear as items in that list rather than as turns of their own. The rule
+    // this block exists for is unchanged: no turn may carry empty content.
+    it('carries both markers into the merged turn when a burst is all media', () => {
       const ctx = baseCtx([media('m1', [{ type: 'audio' }]), media('m2', [])]);
       const result = buildPrompt({ salon: makeSalon(), ctx, bookingLinkRecentlySent: false, imagesByMessageId: new Map() });
-      expect(result.messages[0].content).toBe('[no text in this message, ask what they are after]');
-      expect(result.messages[1].content).toBe('[no text in this message, ask what they are after]');
+      expect(result.messages).toHaveLength(1);
+      const content = result.messages[0].content as string;
+      expect(content).toContain('1. [no text in this message, ask what they are after]');
+      expect(content).toContain('2. [no text in this message, ask what they are after]');
+      expect(result.messages.every((m) => m.content !== '')).toBe(true);
     });
 
     it('keeps a caption and appends the marker when both are present', () => {
@@ -546,6 +634,9 @@ describe('buildPrompt time awareness', () => {
       expect(result.messages[0].content).toBe('can you do this? [no text in this message, ask what they are after]');
     });
 
+    // A message with no text, no marker and no pixels is dropped from the burst
+    // list rather than labelled. An earlier draft substituted "[sent a photo]" for
+    // it, which would have told the model about a photo that does not exist.
     it('drops a genuinely empty turn entirely rather than emitting empty content', () => {
       const ctx = baseCtx([
         makeMsg('m1', 'inbound', null), // text channel, no text, no attachments

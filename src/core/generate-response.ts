@@ -553,6 +553,12 @@ export async function generateResponse(
         policy: {
           maxWordsPerMessage: salon.config.max_words_per_message,
           maxEmojis: salon.config.max_emojis,
+          // One bubble per waiting message. A client who asked three things reads
+          // three short answers more easily than one paragraph welding them
+          // together, and it also makes a skipped question obvious at a glance
+          // instead of buried mid-sentence. Capped at four so a long burst cannot
+          // turn into a wall of notifications.
+          maxMessages: Math.min(4, Math.max(2, prompt.waitingMessages)),
         },
       });
     } catch (err) {

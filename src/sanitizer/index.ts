@@ -10,6 +10,10 @@ export interface SanitizeContext {
   policy: {
     maxWordsPerMessage: number;
     maxEmojis: number;
+    /** How many bubbles this reply may use. One per client message that is still
+     * waiting, so three questions can come back as three short answers rather
+     * than one paragraph carrying all three. Defaults to the long-standing 2. */
+    maxMessages?: number;
   };
 }
 
@@ -133,7 +137,7 @@ export async function sanitize(raw: string, ctx: SanitizeContext): Promise<Sanit
   if (words.length <= ctx.policy.maxWordsPerMessage) {
     messages = [text];
   } else {
-    messages = splitOnSentenceBoundaries(text, ctx.policy.maxWordsPerMessage, 2);
+    messages = splitOnSentenceBoundaries(text, ctx.policy.maxWordsPerMessage, ctx.policy.maxMessages ?? 2);
     mods.push('split_into_multiple');
   }
 
