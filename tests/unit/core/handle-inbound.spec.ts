@@ -174,7 +174,17 @@ describe('handleInbound — attachment classification + escalation prečaci', ()
     vi.mocked(messagesRepo.insertInbound).mockResolvedValue({ id: 'msg-1' });
   });
 
-  it('escalates with reason video_attachment when attachment.type=video, notify-only: owner told, bot keeps talking', async () => {
+  /**
+   * Instagram sends every video and every voice note as .mp4, so this test uses
+   * one: an earlier draft reached for .mov to dodge the probe, which tested a
+   * shape production never produces.
+   *
+   * There is no network here, so the probe cannot answer and the type stays a
+   * guess. The reason is the hedged one on purpose. Which label a SETTLED type
+   * earns is covered where the probe is injectable, in
+   * tests/unit/images/refine-media-type.spec.ts.
+   */
+  it('hedges the reason when the media type cannot be settled, notify-only: owner told, bot keeps talking', async () => {
     const ghl = makeGhl({
       getMessage: vi.fn(async () => ({
         text: '',
@@ -191,7 +201,7 @@ describe('handleInbound — attachment classification + escalation prečaci', ()
       expect.anything(),
       'conv-1',
       'escalated_to_owner',
-      { reason: 'video_attachment', notifyOnly: true },
+      { reason: 'unconfirmed_media_attachment', notifyOnly: true },
     );
     expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
     expect(vi.mocked(conversationsRepo.setHandoffUntil)).not.toHaveBeenCalled();

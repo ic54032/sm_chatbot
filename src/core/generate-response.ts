@@ -25,7 +25,7 @@ import { processImageForVision, type ProcessedImage } from '../images/process.js
 
 const ALLOWED_STATE_KEYS = ['client_is_hesitant', 'last_quoted_service'] as const;
 
-// The eight escalation reasons the master prompt defines. Reasons recovered
+// The escalation reasons the master prompt defines. Reasons recovered
 // from LEAKED text-form tool calls are validated against this set (native
 // tool-call args stay free-form) so model-mangled or client-quoted text can't
 // end up in the owner's GHL last_escalation_reason field.
@@ -38,6 +38,7 @@ const LEAKED_ESCALATION_REASONS = new Set([
   'unanswered_question',
   'client_refused_consultation_path',
   'hostile_language',
+  'correction_lead',
 ]);
 
 export interface GenerateResponseDeps {

@@ -5,6 +5,18 @@ import { logger } from '../lib/logger.js';
 interface MediaAttachment {
   url: string | null;
   type: 'image' | 'audio' | 'video';
+  /**
+   * True once the container bytes have SETTLED whether an ambiguous .mp4 is a
+   * video or a voice note. Absent or false means the type is still the extension's
+   * guess, which for .mp4 is always 'video'.
+   *
+   * The owner's notification depends on the difference. A voice note was announced
+   * to her as a video for three rounds running, so the labels were merged into one
+   * hedge that covered both. That hedge is now needed only where it is TRUE: this
+   * flag lets a settled type say exactly what arrived and leaves the vague wording
+   * for the probe timeouts, instead of applying it to every case.
+   */
+  typeConfirmed?: boolean;
 }
 
 /**
@@ -52,31 +64,40 @@ function classifyContainer(head: Buffer): 'video' | 'audio' | null {
 export async function refineMediaTypes<T extends MediaAttachment>(
   attachments: T[],
   fetcher: Fetcher = fetch,
-): Promise<T[]> {
+  // The flag is added here, so it has to appear in the return type: callers pass
+  // in shapes that do not carry it yet.
+): Promise<Array<T & { typeAmbiguous?: boolean }>> {
   const ambiguous = (a: MediaAttachment): a is T & { url: string } =>
     typeof a.url === 'string' && AMBIGUOUS_EXT.test(a.url);
   if (!attachments.some(ambiguous)) return attachments;
 
   return Promise.all(
     attachments.map(async (att) => {
-      if (!ambiguous(att)) return att;
+      if (!ambiguous(att)) return att; // the extension already settles it
       try {
         const res = await fetcher(att.url, {
           headers: { Range: `bytes=0-${PROBE_BYTES}` },
           signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
         });
-        if (!res.ok) return att;
+        if (!res.ok) return { ...att, typeAmbiguous: true };
         const head = Buffer.from(await res.arrayBuffer());
         const verdict = classifyContainer(head);
-        if (!verdict) return att;
+        if (!verdict) return { ...att, typeAmbiguous: true };
         if (verdict !== att.type) {
           logger.info({ url: att.url, was: att.type, now: verdict }, 'media type refined from container bytes');
         }
         return { ...att, type: verdict };
       } catch (err) {
-        // Best-effort: keep whatever the extension suggested.
-        logger.debug({ err, url: att.url }, 'media type probe failed; keeping inferred type');
-        return att;
+        // Keep whatever the extension suggested, but say that it is a guess. The
+        // extension calls every Instagram voice note a video, so an unprobed .mp4
+        // is a coin toss and the owner should not be told otherwise.
+        // Deliberately warn, not debug. Every Instagram video and voice note is a
+        // .mp4, so this branch decides what the owner is told about REAL media,
+        // and a hedged notification is a worse notification. If this line turns
+        // out to be common, the split labels are not buying anything and the
+        // probe needs attention rather than the labels.
+        logger.warn({ err, url: att.url }, 'media type probe failed; owner gets the hedged label');
+        return { ...att, typeAmbiguous: true };
       }
     }),
   );

@@ -89,6 +89,10 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
 
   const hasVideo = attachments.some((a) => a.type === 'video');
   const hasAudio = attachments.some((a) => a.type === 'audio');
+  // Say exactly what arrived unless the type genuinely could not be established.
+  // Only an ambiguous extension whose container probe also failed lands here; a
+  // .mov settles from its extension and is never probed.
+  const mediaTypeAmbiguous = attachments.some((a) => a.typeAmbiguous);
   const images = attachments.filter((a) => a.type === 'image' && a.url);
   const imagesMissingUrl = attachments.filter((a) => a.type === 'image' && !a.url);
 
@@ -188,7 +192,9 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
   // describing what arrived, so the model acknowledges it warmly without ever
   // claiming to have seen it.
   const notifyReason = hasVideo
-    ? 'video_attachment'
+    ? mediaTypeAmbiguous
+      ? 'unconfirmed_media_attachment'
+      : 'video_attachment'
     : hasAudio
       ? 'audio_attachment'
       : imagesMissingUrl.length > 0
@@ -208,7 +214,8 @@ export async function handleInbound(deps: HandleInboundDeps, input: HandleInboun
       salon,
       conversation,
       reason: notifyReason,
-      pauseBot: false,
+      // pauseBot comes from the reason now (NOTIFY_WITHOUT_PAUSING in escalate.ts).
+      // Every reason reachable here is in that set.
     });
   }
 

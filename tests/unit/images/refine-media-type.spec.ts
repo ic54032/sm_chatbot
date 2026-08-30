@@ -26,6 +26,8 @@ describe('refineMediaTypes', () => {
       fetcher as unknown as typeof fetch,
     );
     expect(out[0].type).toBe('audio');
+    // Settled, so the owner's notification can say "voice note" outright.
+    expect(out[0].typeAmbiguous).toBeUndefined();
     // Only the first few KB are pulled, never the whole file.
     expect(fetcher.mock.calls[0][1]).toMatchObject({ headers: { Range: expect.stringContaining('bytes=0-') } });
   });
@@ -37,6 +39,7 @@ describe('refineMediaTypes', () => {
       fetcher as unknown as typeof fetch,
     );
     expect(out[0].type).toBe('video');
+    expect(out[0].typeAmbiguous).toBeUndefined();
   });
 
   it('falls back to the ftyp codec brand when no track handler is in range', async () => {
@@ -61,7 +64,15 @@ describe('refineMediaTypes', () => {
     expect(out.map((a) => a.type)).toEqual(['image', 'video']);
   });
 
-  it('keeps the inferred type when the probe throws, errors, or is undecidable', async () => {
+  /**
+   * Every video and every voice note arriving from Instagram through GHL is a
+   * .mp4, so this is not a rare branch: it is what happens to real media whenever
+   * the probe cannot answer. The extension guess ("video") is kept because it is
+   * the better of two guesses, but it stays MARKED as a guess, because telling the
+   * owner "video" here is exactly how a voice note was announced as a video for
+   * three rounds running.
+   */
+  it('keeps the inferred type when the probe throws, errors, or is undecidable, but marks it a guess', async () => {
     const throwing = vi.fn(async () => {
       throw new Error('timeout');
     });
@@ -74,6 +85,7 @@ describe('refineMediaTypes', () => {
         fetcher as unknown as typeof fetch,
       );
       expect(out[0].type).toBe('video');
+      expect(out[0].typeAmbiguous).toBe(true);
     }
   });
 

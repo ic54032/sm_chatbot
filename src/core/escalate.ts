@@ -9,6 +9,31 @@ import { GhlApiError } from '../ghl/errors.js';
 import { escalationLabel } from './escalation-labels.js';
 import { logger } from '../lib/logger.js';
 
+/**
+ * Reasons that reach the owner WITHOUT stopping the bot.
+ *
+ * The distinction is whether a human has to take the conversation over. Media the
+ * bot cannot open, and a lead she will want to see, both need her attention while
+ * the bot keeps the client warm. A refund or a complaint needs her instead of the
+ * bot, so it pauses.
+ *
+ * Deciding this from the reason rather than from the caller is what makes a lead
+ * routable at all. Until 2026-08-26 `pauseBot: false` existed only inside
+ * handle-inbound, chosen from the attachment type, so a damage photo (an ordinary
+ * image) had no path to the owner whatsoever. It got a good consult reply, no
+ * notification fired, and the color-correction lead died in the inbox. Round 4
+ * called that the highest-priority failure in the run, and it was lost revenue
+ * rather than a bug the client could see.
+ */
+export const NOTIFY_WITHOUT_PAUSING = new Set([
+  'video_attachment',
+  'audio_attachment',
+  'unviewable_media',
+  'unconfirmed_media_attachment',
+  'image_without_url',
+  'correction_lead',
+]);
+
 export interface EscalateInput {
   db: Db;
   ghl: GhlClient;
@@ -18,7 +43,8 @@ export interface EscalateInput {
   contextSummary?: string;
   /**
    * Whether this also hands the conversation over, i.e. stops the bot until the
-   * owner is done. Defaults to true.
+   * owner is done. Defaults to whatever the reason implies, which is what callers
+   * should normally rely on. Pass it explicitly only to override that.
    *
    * Media is the exception (QA Round 3, item 4.6): a client sending a video or a
    * voice note should get the owner's attention AND keep talking to the bot.
@@ -29,7 +55,7 @@ export interface EscalateInput {
 }
 
 export async function escalateToOwner(input: EscalateInput): Promise<void> {
-  const pauseBot = input.pauseBot ?? true;
+  const pauseBot = input.pauseBot ?? !NOTIFY_WITHOUT_PAUSING.has(input.reason);
   const handoffUntil = new Date(Date.now() + input.salon.config.handoff_window_hours * 3600_000);
 
   await input.db.transaction().execute(async (tx) => {
@@ -56,20 +82,16 @@ export async function escalateToOwner(input: EscalateInput): Promise<void> {
   // told. Notify-only carries its own tag instead.
   const tag = pauseBot ? 'escalation_active' : 'owner_fyi';
 
-  try {
-    // Remove first so the add always registers as a transition, even if a
-    // previous cycle left the tag behind. GHL fires its workflow on the add.
-    await input.ghl.removeTag(input.conversation.ghlContactId, [tag]).catch(() => undefined);
-    await input.ghl.addTag(input.conversation.ghlContactId, [tag]);
-  } catch (err) {
-    if (err instanceof GhlApiError && (err.status === 401 || err.status === 403)) {
-      logger.error({ err, salonId: input.salon.id }, 'GHL auth failed during addTag; disabling salon');
-      await salonsRepo.setActive(input.db, input.salon.id, false);
-    } else {
-      logger.error({ err, conversationId: input.conversation.id }, 'ghl addTag failed during escalate');
-    }
-  }
-
+  // The reason is written BEFORE the tag, and the order is the whole point.
+  //
+  // The owner's notification workflow triggers on "tag added" and reads
+  // last_escalation_reason to fill in its Reason line. Writing the field after the
+  // tag meant the workflow read whatever the PREVIOUS escalation had left there.
+  // On 2026-08-26 a VIP feature offer from a 300k-follower account was announced
+  // to the owner as "Refund request", because a refund had escalated on the same
+  // contact minutes earlier. It is a race, so it also passed sometimes, which is
+  // why the wrong reasons looked like a per-branch bug rather than one ordering
+  // mistake. Nothing downstream is allowed to move above this.
   try {
     await input.ghl.updateCustomField({
       contactId: input.conversation.ghlContactId,
@@ -84,6 +106,21 @@ export async function escalateToOwner(input: EscalateInput): Promise<void> {
       await salonsRepo.setActive(input.db, input.salon.id, false);
     } else {
       logger.error({ err, conversationId: input.conversation.id }, 'ghl updateCustomField failed during escalate');
+    }
+  }
+
+  // Now the tag, which is what actually notifies.
+  try {
+    // Remove first so the add always registers as a transition, even if a
+    // previous cycle left the tag behind. GHL fires its workflow on the add.
+    await input.ghl.removeTag(input.conversation.ghlContactId, [tag]).catch(() => undefined);
+    await input.ghl.addTag(input.conversation.ghlContactId, [tag]);
+  } catch (err) {
+    if (err instanceof GhlApiError && (err.status === 401 || err.status === 403)) {
+      logger.error({ err, salonId: input.salon.id }, 'GHL auth failed during addTag; disabling salon');
+      await salonsRepo.setActive(input.db, input.salon.id, false);
+    } else {
+      logger.error({ err, conversationId: input.conversation.id }, 'ghl addTag failed during escalate');
     }
   }
 
