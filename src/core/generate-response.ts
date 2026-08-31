@@ -644,6 +644,32 @@ export async function generateResponse(
       throw err;
     }
 
+    // A turn the client filled with nothing the bot can read cannot justify an
+    // escalation, so any it signals here is dropped.
+    //
+    // Production 2026-08-31: a lone voice note produced escalate_to_owner with
+    // reason "client_refused_consultation_path". The refusal was four turns back
+    // and had already been answered, so the owner got a second notification about
+    // a message that contained no words at all, carrying a reason that had nothing
+    // to do with it. The same reason had fired the same way an hour earlier.
+    //
+    // Whatever the model concludes on such a turn comes from earlier context, and
+    // earlier context is answered by definition — the answered-guard above would
+    // have skipped this run otherwise. The owner has already been told what
+    // arrived: handle-inbound notifies the moment media lands, which is also why
+    // dropping this costs her nothing.
+    //
+    // A captionless photo is NOT such a turn. The bot can see it, and a damage
+    // photo with no words is a real correction lead (Round 4, item C2).
+    if (escalationArgs && prompt.clientSaidNothing) {
+      logger.info(
+        { conversationId, reason: escalationArgs.reason },
+        'client sent nothing readable this turn; dropping the escalation it signalled as stale',
+      );
+      escalationArgs = undefined;
+      carriedEscalationArgs = undefined;
+    }
+
     // 1.9 tripwire — internal-vocabulary / machinery-narration net (defense in
     // depth behind Section 12 of the prompt). extractLeakedToolCalls already
     // stripped bracketed tool SYNTAX; this catches PLAIN-ENGLISH machinery the

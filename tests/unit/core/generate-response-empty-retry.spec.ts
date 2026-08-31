@@ -376,6 +376,46 @@ describe('generateResponse — empty-output retry', () => {
   });
 
   /**
+   * The duplicate notification the owner saw on 2026-08-31 came from here: the
+   * backend notifies the moment a voice note lands, and the model then escalated a
+   * stale reason on the same turn, so she was pinged twice about one message.
+   */
+  it('drops an escalation signalled on a turn where the client sent nothing readable', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue({
+      ...makeCtx('ignored'),
+      recentMessages: [
+        {
+          ...makeCtx('ignored').recentMessages[0],
+          textContent: null,
+          channelType: 'image',
+          rawContent: { attachments: [{ type: 'audio', url: 'https://x.test/v.mp4' }] },
+        },
+      ],
+    });
+    const llm = new FakeLlmClient();
+    llm.stage({
+      match: () => true,
+      output: {
+        text: "tell me what you're hoping to achieve with your hair and we can get you sorted",
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'client_refused_consultation_path' } }],
+      },
+    });
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    // The reply still goes out; only the stale escalation is dropped.
+    expect(vi.mocked(ghl.sendMessage)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+    expect(vi.mocked(eventsRepo.insert)).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      'escalated_to_owner',
+      expect.anything(),
+    );
+  });
+
+  /**
    * The safety direction. containsHandoffPromise was built to catch a promise made
    * WITHOUT a tool call, so it is tuned to avoid false positives; a MISS here would
    * drop a pause that should have stood. The reasons where that matters most are

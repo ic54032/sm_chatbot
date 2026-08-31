@@ -466,6 +466,47 @@ describe('buildPrompt burst merging', () => {
   });
 });
 
+/**
+ * A turn the client filled with nothing readable cannot justify an escalation.
+ * On 2026-08-31 a lone voice note produced "client_refused_consultation_path",
+ * four turns after the actual refusal had been answered, and the owner got a
+ * second notification about a message containing no words.
+ */
+describe('buildPrompt clientSaidNothing', () => {
+  const media = (id: string, atts: Array<{ type: string }>, text: string | null = null) => ({
+    ...makeMsg(id, 'inbound', text),
+    channelType: 'image',
+    rawContent: { attachments: atts },
+  });
+  const build = (msgs: ConversationContext['recentMessages'], imgs: Map<string, ProcessedImage[]> = new Map()) =>
+    buildPrompt({ salon: makeSalon(), ctx: baseCtx(msgs), bookingLinkRecentlySent: false, imagesByMessageId: imgs });
+
+  it('is true for a lone voice note', () => {
+    expect(build([media('m1', [{ type: 'audio' }])]).clientSaidNothing).toBe(true);
+  });
+
+  it('is true for a burst of media with no words in any of it', () => {
+    expect(
+      build([media('m1', [{ type: 'audio' }]), media('m2', [{ type: 'video' }])]).clientSaidNothing,
+    ).toBe(true);
+  });
+
+  it('is false when the media carried a caption', () => {
+    expect(build([media('m1', [{ type: 'video' }], 'can you do this?')]).clientSaidNothing).toBe(false);
+  });
+
+  // The C2 case. A damage photo with no words is a real lead, and the bot can see
+  // it, so the escalation it signals must survive.
+  it('is false for a captionless PHOTO, because the bot can see it', () => {
+    const imgs = new Map([['m1', [img]]]);
+    expect(build([makeMsg('m1', 'inbound', null)], imgs).clientSaidNothing).toBe(false);
+  });
+
+  it('is false on an ordinary text turn', () => {
+    expect(build([makeMsg('m1', 'inbound', 'how much is balayage')]).clientSaidNothing).toBe(false);
+  });
+});
+
 describe('buildPrompt weekday hours facts', () => {
   const hoursSalon = () => {
     const salon = makeSalon({ timezone: 'America/Denver' });

@@ -21,6 +21,20 @@ export interface BuildPromptInput {
 export interface BuildPromptOutput {
   systemPrompt: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string | ContentBlock[] }>;
+  /**
+   * True when the client has said nothing this turn that the bot can work from:
+   * no words, and no pixels it can see. Only markers for media it cannot open.
+   *
+   * Anything the model concludes on such a turn came from earlier context, and
+   * earlier context has already been answered. On 2026-08-31 a lone voice note
+   * produced escalate_to_owner with reason "client_refused_consultation_path" —
+   * the refusal was four turns back and had already been handled, and the owner
+   * got a second notification for a message that said nothing.
+   *
+   * A captionless PHOTO is deliberately not included: the bot can see it, and a
+   * damage photo with no words is a real correction lead.
+   */
+  clientSaidNothing: boolean;
   /** How many client messages this reply owes an answer to. The caller lets the
    * reply use one bubble per message, so three questions can come back as three
    * short answers instead of one paragraph carrying all of them. */
@@ -265,5 +279,13 @@ ${JSON.stringify(sot, null, 2)}`;
     }
   }
 
-  return { systemPrompt, messages, stateLines, waitingMessages };
+  // `burst` is only populated when more than one message is waiting, so a single
+  // unanswered message has to be read from the window directly.
+  const unanswered = ctx.recentMessages.filter(isUnanswered);
+  const clientSaidNothing =
+    unanswered.length > 0 &&
+    visiblePhotos === 0 &&
+    unanswered.every((m) => (m.textContent ?? '').trim().length === 0);
+
+  return { systemPrompt, messages, stateLines, waitingMessages, clientSaidNothing };
 }
