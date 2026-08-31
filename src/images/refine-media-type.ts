@@ -46,19 +46,30 @@ const PROBE_BYTES = 4095;
 
 type Fetcher = typeof fetch;
 
-/** 'video' | 'audio' | null (undecidable from the bytes we read). */
-function classifyContainer(head: Buffer): 'video' | 'audio' | null {
+/**
+ * The verdict AND the evidence behind it.
+ *
+ * The evidence is returned so the caller can log it. Knowing only that a probe
+ * said "video" does not tell you whether Instagram changed what it sends, and the
+ * whole voice-note-labelled-as-video saga came from having no visibility into
+ * this step. `brands` is the ftyp compatible-brand list, which is the closest
+ * thing to a format fingerprint these files carry.
+ */
+function classifyContainer(head: Buffer): {
+  verdict: 'video' | 'audio' | null;
+  by: 'handler' | 'brand' | 'none';
+  brands: string;
+} {
   const ascii = head.toString('latin1');
-  // Track handlers are the strongest signal when moov sits near the front.
-  if (ascii.includes('vide')) return 'video';
-  if (ascii.includes('soun')) return 'audio';
-  // Fall back to the ftyp compatible-brand list: a video codec brand means video.
   const ftyp = ascii.indexOf('ftyp');
-  if (ftyp >= 0) {
-    const brands = ascii.slice(ftyp, ftyp + 40);
-    if (/avc1|hvc1|hev1|av01/.test(brands)) return 'video';
-  }
-  return null;
+  const brands = ftyp >= 0 ? ascii.slice(ftyp, ftyp + 32).replace(/[^\x20-\x7e]/g, ' ').trim() : '';
+
+  // Track handlers are the strongest signal when moov sits near the front.
+  if (ascii.includes('vide')) return { verdict: 'video', by: 'handler', brands };
+  if (ascii.includes('soun')) return { verdict: 'audio', by: 'handler', brands };
+  // Fall back to the compatible-brand list: a video codec brand means video.
+  if (/avc1|hvc1|hev1|av01/.test(brands)) return { verdict: 'video', by: 'brand', brands };
+  return { verdict: null, by: 'none', brands };
 }
 
 export async function refineMediaTypes<T extends MediaAttachment>(
@@ -79,13 +90,22 @@ export async function refineMediaTypes<T extends MediaAttachment>(
           headers: { Range: `bytes=0-${PROBE_BYTES}` },
           signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
         });
-        if (!res.ok) return { ...att, typeAmbiguous: true };
-        const head = Buffer.from(await res.arrayBuffer());
-        const verdict = classifyContainer(head);
-        if (!verdict) return { ...att, typeAmbiguous: true };
-        if (verdict !== att.type) {
-          logger.info({ url: att.url, was: att.type, now: verdict }, 'media type refined from container bytes');
+        if (!res.ok) {
+          logger.warn({ url: att.url, status: res.status }, 'media probe: range request refused, type stays ambiguous');
+          return { ...att, typeAmbiguous: true };
         }
+        const head = Buffer.from(await res.arrayBuffer());
+        const { verdict, by, brands } = classifyContainer(head);
+        // Logged on EVERY probe, not only when the verdict differs from the
+        // extension. Silence used to mean two different things, "probe confirmed
+        // the guess" and "probe never ran", and telling them apart is the whole
+        // point of having a probe. `brands` is the format fingerprint: if
+        // Instagram changes what it sends, this line is where it shows up first.
+        logger.info(
+          { url: att.url, extensionSaid: att.type, verdict, by, brands, bytes: head.length },
+          'media probe result',
+        );
+        if (!verdict) return { ...att, typeAmbiguous: true };
         return { ...att, type: verdict };
       } catch (err) {
         // Keep whatever the extension suggested, but say that it is a guess. The

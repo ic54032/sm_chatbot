@@ -29,6 +29,26 @@ const ALLOWED_STATE_KEYS = ['client_is_hesitant', 'last_quoted_service'] as cons
 // from LEAKED text-form tool calls are validated against this set (native
 // tool-call args stay free-form) so model-mangled or client-quoted text can't
 // end up in the owner's GHL last_escalation_reason field.
+/**
+ * Reasons where a human genuinely has to take the conversation over, whatever the
+ * reply happened to say. These always pause.
+ *
+ * The list exists so that a gap in handoff-promise detection cannot drop a pause
+ * it should have kept. containsHandoffPromise is deliberately conservative — it
+ * was built for the opposite job, catching a promise the model made WITHOUT
+ * firing the tool, where a false positive costs a needless escalation. Used in
+ * this direction a miss costs the opposite, so the reasons that matter most are
+ * taken out of its hands entirely.
+ */
+const ALWAYS_PAUSE_REASONS = new Set([
+  'refund_request',
+  'this_salon_complaint',
+  'medical_question',
+  'hostile_language',
+  'explicit_request_for_owner',
+  'vip_client',
+]);
+
 const LEAKED_ESCALATION_REASONS = new Set([
   'refund_request',
   'vip_client',
@@ -246,21 +266,35 @@ export async function generateResponse(
   // Empirical question: bot's response sounded image-aware on first turn but
   // refused to describe colors on follow-up — could be hallucination from prompt
   // alone or genuine model behavior. This log tells us definitively.
+  // The text goes in alongside the shape, because the shape alone stopped being
+  // enough to answer anything. Burst merging folds several client messages into
+  // one turn, so "textLen: 207" is now the only trace of what actually arrived: a
+  // voice-note turn and a three-question turn look identical in the log, and on
+  // 2026-08-30 two media turns could not be diagnosed at all — there was no way to
+  // tell "the marker was there and handled well" from "the marker never arrived".
+  //
+  // Truncated at 300 characters, which is past the end of virtually every real
+  // message (replies run 100 to 160) and bounds the worst case at roughly 4.5KB
+  // per line across a full window.
+  const trim = (t: string) => (t.length > 300 ? `${t.slice(0, 300)}…[+${t.length - 300}]` : t);
+
   const messageShapes = prompt.messages.map((m, i) => {
     if (typeof m.content === 'string') {
-      return { idx: i, role: m.role, kind: 'text', textLen: m.content.length, imageCount: 0 };
+      return { idx: i, role: m.role, kind: 'text', textLen: m.content.length, imageCount: 0, text: trim(m.content) };
     }
     const blocks = m.content;
     const imageBlocks = blocks.filter((b) => b.type === 'image');
     const textBlocks = blocks.filter((b) => b.type === 'text');
+    const text = textBlocks.map((b) => (b.type === 'text' ? b.text : '')).join(' ');
     return {
       idx: i,
       role: m.role,
       kind: 'multimodal',
-      textLen: textBlocks.reduce((s, b) => s + (b.type === 'text' ? b.text.length : 0), 0),
+      textLen: text.length,
       imageCount: imageBlocks.length,
       imageMediaTypes: imageBlocks.map((b) => (b.type === 'image' ? b.mediaType : 'n/a')),
       imageBase64Lens: imageBlocks.map((b) => (b.type === 'image' ? b.base64.length : 0)),
+      text: trim(text),
     };
   });
   logger.info(
@@ -298,6 +332,10 @@ export async function generateResponse(
   // Intent recovered on an attempt that produced NO text, carried into the
   // corrective retry (which runs without tools and so cannot re-fire it).
   let carriedEscalationArgs: { reason: string; contextSummary?: string } | undefined;
+  // True once an escalation intent has survived an attempt that wrote nothing.
+  let escalationCarriedFromEmpty = false;
+  // Set when a carried escalation is downgraded to notify-only below.
+  let escalationDowngraded = false;
   const MAX_EMPTY_RETRIES = 1;
   // How long one llm_failed notification covers. A model outage hits every
   // inbound identically, so without this the owner gets an alert per message.
@@ -464,6 +502,7 @@ export async function generateResponse(
     // dropping the intent there would notify nobody about a refund the client
     // was already promised.
     escalationArgs = carriedEscalationArgs;
+    if (carriedEscalationArgs) escalationCarriedFromEmpty = true;
 
     // Collect tool intentions. Defer escalate_to_owner execution until AFTER send
     // so the LLM-generated reassurance text (e.g. "let me grab Sarah for you")
@@ -725,6 +764,35 @@ export async function generateResponse(
   // After successful send, do the LLM-requested escalation. Owner gets push,
   // opens conversation, sees customer's message + bot's reassurance, takes over.
   if (escalationArgs) {
+    // A carried escalation must not freeze a conversation the client was just
+    // invited to continue.
+    //
+    // Production 2026-08-30: a media turn's first attempt called escalate_to_owner
+    // and wrote nothing, the corrective retry (which runs without tools, so it
+    // cannot reconsider) wrote "send over what you're hoping to achieve with your
+    // hair, would love to help!", and the carried reason then paused the bot for
+    // twelve hours. The client was asked a question and then ignored.
+    //
+    // The retry had the full conversation and chose not to hand off, so its text
+    // is better evidence of intent than a tool call from an attempt that produced
+    // nothing. When the two disagree, keep the notification and drop the pause:
+    // the owner still hears about it, and the bot keeps its word. This applies
+    // ONLY to a carried intent — an escalation the model made alongside real text
+    // is left exactly as it was — and never to a reason in ALWAYS_PAUSE_REASONS,
+    // so a refund or a complaint pauses on the reason alone.
+    const promisedHandoff = containsHandoffPromise(
+      sanitized.messages.join(' '),
+      salon.sourceOfTruth.salon_basics.owner_first_name,
+    );
+    const downgrade =
+      escalationCarriedFromEmpty && !promisedHandoff && !ALWAYS_PAUSE_REASONS.has(escalationArgs.reason);
+    escalationDowngraded = downgrade;
+    if (downgrade) {
+      logger.warn(
+        { conversationId, reason: escalationArgs.reason },
+        'escalation carried from an empty attempt but the reply promised no handoff; notifying without pausing',
+      );
+    }
     await escalateToOwner({
       db: deps.db,
       ghl: deps.ghl,
@@ -732,11 +800,15 @@ export async function generateResponse(
       conversation: ctx.conversation,
       reason: escalationArgs.reason,
       contextSummary: escalationArgs.contextSummary,
+      // undefined keeps whatever the reason implies (NOTIFY_WITHOUT_PAUSING).
+      pauseBot: downgrade ? false : undefined,
     });
   }
 
-  // Replied successfully. If we escalated, the bot is now paused so a re-drive
-  // would just be dropped — return null. Otherwise hand the watermark back so
-  // the worker re-enqueues if a newer message arrived mid-processing (B6).
-  return { latestInboundAt: escalationArgs ? null : latestInboundAt };
+  // Replied successfully. If we escalated AND paused, a re-drive would just be
+  // dropped, so return null. A notify-only escalation leaves the bot running, so
+  // a message that arrived mid-processing still has to be re-driven (B6) — the
+  // watermark goes back exactly as it would on an ordinary turn.
+  const paused = escalationArgs !== undefined && !escalationDowngraded;
+  return { latestInboundAt: paused ? null : latestInboundAt };
 }

@@ -335,6 +335,77 @@ describe('generateResponse — empty-output retry', () => {
     expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'refund_request', null);
   });
 
+  /**
+   * An attempt that wrote nothing cannot have promised the client anything.
+   *
+   * Production 2026-08-30: a media turn's first attempt called escalate_to_owner
+   * and produced no text, the tool-less retry wrote "send over what you're hoping
+   * to achieve with your hair, would love to help!", and the carried reason then
+   * paused the bot for twelve hours. The client was invited to reply and then
+   * ignored. The retry saw the whole conversation and chose not to hand off, so
+   * its text is the better evidence of intent.
+   */
+  it('a carried escalation whose retry promised no handoff notifies without pausing', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('(sent a video)'));
+    const llm = new FakeLlmClient();
+    let n = 0;
+    llm.stage({
+      match: () => n++ === 0,
+      output: {
+        text: '',
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'client_refused_consultation_path' } }],
+      },
+    });
+    llm.stage({
+      match: () => true,
+      output: { text: "send over what you're hoping to achieve with your hair, would love to help!", toolCalls: [] },
+    });
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    // The owner still hears about it, but the conversation is not frozen.
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+    expect(vi.mocked(conversationsRepo.setHandoffUntil)).not.toHaveBeenCalled();
+    expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      'escalated_to_owner',
+      expect.objectContaining({ reason: 'client_refused_consultation_path', notifyOnly: true }),
+    );
+  });
+
+  /**
+   * The safety direction. containsHandoffPromise was built to catch a promise made
+   * WITHOUT a tool call, so it is tuned to avoid false positives; a MISS here would
+   * drop a pause that should have stood. The reasons where that matters most are
+   * therefore taken out of its hands: they pause on the reason alone.
+   */
+  it('a refund still pauses even when the retry text trips no handoff pattern', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('i want a refund'));
+    const llm = new FakeLlmClient();
+    let n = 0;
+    llm.stage({
+      match: () => n++ === 0,
+      output: { text: '', toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'refund_request' } }] },
+    });
+    llm.stage({
+      // Deliberately worded so no handoff pattern matches it.
+      match: () => true,
+      output: { text: 'so sorry about that, we will sort it out for you today', toolCalls: [] },
+    });
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      'refund_request',
+      null,
+    );
+  });
+
   it('escalation intent + empty on BOTH attempts falls back to the canned line, keeping the ORIGINAL reason', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('i want a refund'));
     const llm = new FakeLlmClient();
