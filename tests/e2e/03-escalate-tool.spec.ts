@@ -88,6 +88,14 @@ describe('e2e #3 — escalate_to_owner tool', () => {
       .selectAll()
       .executeTakeFirstOrThrow();
     expect(state.tags).toContain('escalation_active');
-    expect((state.custom_fields as Record<string, unknown>)['field_reason']).toBe('complaint');
+    // The raw code stays in the database and the HUMAN LABEL goes to GHL, which is
+    // why this differs from the escalations.reason asserted above. The owner reads
+    // this field in a phone notification, where "sanitizer_empty_output" would mean
+    // nothing to her.
+    //
+    // "complaint" is not in the label map, so escalationLabel sentence-cases it
+    // rather than leaking snake_case. That fallback is what this line pins; the
+    // mapped reasons are covered in escalation-labels.spec.ts.
+    expect((state.custom_fields as Record<string, unknown>)['field_reason']).toBe('Complaint');
   });
 });

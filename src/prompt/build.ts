@@ -8,6 +8,13 @@ export interface BuildPromptInput {
   salon: Salon;
   ctx: ConversationContext;
   bookingLinkRecentlySent: boolean;
+  /**
+   * How many consultation objections this conversation has already answered
+   * without handing over, from the escalation_held events. The caller reads it
+   * because buildPrompt is synchronous, the same arrangement as
+   * bookingLinkRecentlySent.
+   */
+  consultPushbacksHeld?: number;
   imagesByMessageId: Map<string, ProcessedImage[]>;
   /** Inbound messages whose image could not be fetched/processed — marked so the
    * model asks for a resend instead of the backend silently escalating. */
@@ -66,6 +73,7 @@ export function hoursSinceLastClientMessage(messages: ConversationContext['recen
 export function buildPrompt(input: BuildPromptInput): BuildPromptOutput {
   const { salon, ctx, bookingLinkRecentlySent, imagesByMessageId, unviewableImageMessageIds } = input;
   const answeredUpTo = input.lastAnsweredInboundAt ?? null;
+  const consultPushbacksHeld = input.consultPushbacksHeld ?? 0;
   const sot = salon.sourceOfTruth;
   const bookingUrl = sot.booking.url;
   const state = ctx.conversation.state;
@@ -181,6 +189,18 @@ Paste it exactly, character for character, whenever you share it. Never paraphra
       // rather than killing the whole response.
     }
   }
+  // Stated only once it has happened, so an ordinary conversation is never primed
+  // to think about an objection it has not had.
+  //
+  // On the turn this matters the line is doing real work: the bot has already
+  // answered one objection without handing over, and telling it so is what stops
+  // it treating the second push as another first.
+  if (consultPushbacksHeld > 0) {
+    stateLines.push(
+      `- Consultation pushbacks already answered without handing over: ${consultPushbacksHeld}`,
+    );
+  }
+
   const gapHours = hoursSinceLastClientMessage(ctx.recentMessages);
   if (gapHours !== null) {
     stateLines.push(`- Hours since last client message: ${gapHours}`);

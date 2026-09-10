@@ -22,6 +22,7 @@ vi.mock('../../../src/db/repos/events.js', () => ({
   recentBookingLinkSent: vi.fn().mockResolvedValue(false),
   latestRepliedInboundAt: vi.fn().mockResolvedValue(null),
   recentEscalationWithReason: vi.fn().mockResolvedValue(false),
+  heldEscalationCount: vi.fn().mockResolvedValue(0),
   insert: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../../../src/db/repos/escalations.js', () => ({
@@ -344,6 +345,11 @@ describe('generateResponse — empty-output retry', () => {
    * paused the bot for twelve hours. The client was invited to reply and then
    * ignored. The retry saw the whole conversation and chose not to hand off, so
    * its text is the better evidence of intent.
+   *
+   * The reason is deliberately NOT client_refused_consultation_path: the
+   * two-strike guard holds that one until the client has pushed back twice, which
+   * would drop this escalation before the downgrade under test could run. Any
+   * reason that pauses by default exercises the same path.
    */
   it('a carried escalation whose retry promised no handoff notifies without pausing', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('(sent a video)'));
@@ -353,7 +359,7 @@ describe('generateResponse — empty-output retry', () => {
       match: () => n++ === 0,
       output: {
         text: '',
-        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'client_refused_consultation_path' } }],
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'unanswered_question' } }],
       },
     });
     llm.stage({
@@ -371,8 +377,257 @@ describe('generateResponse — empty-output retry', () => {
       expect.anything(),
       'conv-1',
       'escalated_to_owner',
-      expect.objectContaining({ reason: 'client_refused_consultation_path', notifyOnly: true }),
+      expect.objectContaining({ reason: 'unanswered_question', notifyOnly: true }),
     );
+  });
+
+  /**
+   * T2 in Rounds 3, 4 and 5 — the same capture every time, twice after being
+   * reported fixed.
+   *
+   * The client's words are deliberately absent from every assertion here. What is
+   * counted is the model's own request to hand over, so these tests drive
+   * heldEscalationCount and never a phrase.
+   */
+  it('holds the first consultation pushback: no tag, no pause, and the client still gets a reply', async () => {
+    vi.mocked(eventsRepo.heldEscalationCount).mockResolvedValue(0);
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('i literally cannot come in just to talk'));
+    const llm = new FakeLlmClient();
+    llm.stage({
+      match: () => true,
+      output: {
+        text: 'the consult is short and it is how renata builds the exact plan',
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'client_refused_consultation_path' } }],
+      },
+    });
+    const ghl = makeGhl();
+
+    const result = await generateResponse(
+      { db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' },
+      fakeSalon,
+      'conv-1',
+    );
+
+    // The DoD for T2: the client gets an answer and GHL hears nothing at all.
+    expect(vi.mocked(ghl.sendMessage)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ghl.addTag)).not.toHaveBeenCalled();
+    expect(vi.mocked(ghl.updateCustomField)).not.toHaveBeenCalled();
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+    expect(vi.mocked(conversationsRepo.setHandoffUntil)).not.toHaveBeenCalled();
+    // The bot is still live, so a message that landed mid-turn must be re-driven.
+    expect(result.latestInboundAt).not.toBeNull();
+  });
+
+  it('records exactly one escalation_held event when it holds', async () => {
+    vi.mocked(eventsRepo.heldEscalationCount).mockResolvedValue(0);
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('cant you just tell me'));
+    const llm = new FakeLlmClient();
+    llm.stage({
+      match: () => true,
+      output: {
+        text: 'the consult is short and renata plans it with you there',
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'client_refused_consultation_path' } }],
+      },
+    });
+
+    await generateResponse(
+      { db: makeFakeDb(), ghl: makeGhl(), llm, defaultLlmModel: 'fake-model' },
+      fakeSalon,
+      'conv-1',
+    );
+
+    const held = vi
+      .mocked(eventsRepo.insert)
+      .mock.calls.filter((c) => c[2] === 'escalation_held');
+    expect(held).toHaveLength(1);
+    expect(held[0][3]).toEqual({ reason: 'client_refused_consultation_path' });
+  });
+
+  it('escalates the second consultation pushback', async () => {
+    vi.mocked(eventsRepo.heldEscalationCount).mockResolvedValue(1);
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(
+      makeCtx('just tell me yes or no, can you fix box dye gone wrong or not'),
+    );
+    const llm = new FakeLlmClient();
+    llm.stage({
+      match: () => true,
+      output: {
+        text: 'let me grab renata, she can give you a straight answer on this',
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'client_refused_consultation_path' } }],
+      },
+    });
+    const ghl = makeGhl();
+
+    const result = await generateResponse(
+      { db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' },
+      fakeSalon,
+      'conv-1',
+    );
+
+    expect(vi.mocked(ghl.addTag)).toHaveBeenCalledWith('contact-1', ['escalation_active']);
+    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalled();
+    // Paused, so a re-drive would be dropped.
+    expect(result.latestInboundAt).toBeNull();
+    // And it must not hold a second time.
+    expect(vi.mocked(eventsRepo.insert).mock.calls.filter((c) => c[2] === 'escalation_held')).toHaveLength(0);
+  });
+
+  it('scopes the counter to this conversation and this reason', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('hi'));
+    const llm = new FakeLlmClient();
+    llm.stage({ match: () => true, output: { text: 'hey! what are you after for your hair?', toolCalls: [] } });
+
+    await generateResponse(
+      { db: makeFakeDb(), ghl: makeGhl(), llm, defaultLlmModel: 'fake-model' },
+      fakeSalon,
+      'conv-1',
+    );
+
+    expect(vi.mocked(eventsRepo.heldEscalationCount)).toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      'client_refused_consultation_path',
+    );
+  });
+
+  /**
+   * The carried-intent path exists so a reason survives an attempt that wrote
+   * nothing. A held reason must NOT survive it, or the hold lasts one attempt and
+   * the escalation lands anyway.
+   */
+  it('does not let a held pushback come back through the corrective retry', async () => {
+    vi.mocked(eventsRepo.heldEscalationCount).mockResolvedValue(0);
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('i cant come in just to talk'));
+    const llm = new FakeLlmClient();
+    let n = 0;
+    llm.stage({
+      match: () => n++ === 0,
+      output: {
+        text: '',
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'client_refused_consultation_path' } }],
+      },
+    });
+    llm.stage({
+      match: () => true,
+      output: { text: 'the consult is quick and it fits around your day', toolCalls: [] },
+    });
+    const ghl = makeGhl();
+
+    await generateResponse(
+      { db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' },
+      fakeSalon,
+      'conv-1',
+    );
+
+    expect(vi.mocked(ghl.sendMessage)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ghl.addTag)).not.toHaveBeenCalled();
+    expect(vi.mocked(eventsRepo.insert).mock.calls.filter((c) => c[2] === 'escalation_held')).toHaveLength(1);
+  });
+
+  /**
+   * A KNOWN GAP, pinned so nobody reads the threshold as watertight.
+   *
+   * The counter governs the reason the model sends. If the model writes a handoff
+   * sentence and fires no tool at all, the safety net manufactures
+   * implied_handoff_no_tool_call, which is not governed and escalates on turn one.
+   * Round 5's T1 and T5 are that same net firing. Closing this needs the reply
+   * text corrected rather than the escalation dropped, because dropping it leaves
+   * the client promised someone who never arrives.
+   */
+  it('still escalates a handoff sentence with no tool call, which the counter does not govern', async () => {
+    vi.mocked(eventsRepo.heldEscalationCount).mockResolvedValue(0);
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('i literally cannot come in just to talk'));
+    const llm = new FakeLlmClient();
+    llm.stage({
+      match: () => true,
+      output: { text: "no worries! i'll get renata to give you a direct answer", toolCalls: [] },
+    });
+    const ghl = makeGhl();
+
+    await generateResponse(
+      { db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' },
+      fakeSalon,
+      'conv-1',
+    );
+
+    expect(vi.mocked(ghl.addTag)).toHaveBeenCalledWith('contact-1', ['escalation_active']);
+  });
+
+  // The counter must never delay a reason that has nothing to do with the consult,
+  // even on a turn where the client is also being blunt about wanting an answer.
+  it('does not hold a refund, whatever the consultation counter says', async () => {
+    vi.mocked(eventsRepo.heldEscalationCount).mockResolvedValue(0);
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(
+      makeCtx('just tell me yes or no, am i getting a refund'),
+    );
+    const llm = new FakeLlmClient();
+    llm.stage({
+      match: () => true,
+      output: {
+        text: 'let me get renata on this for you',
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'refund_request' } }],
+      },
+    });
+    const ghl = makeGhl();
+
+    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
+
+    expect(vi.mocked(ghl.addTag)).toHaveBeenCalledWith('contact-1', ['escalation_active']);
+  });
+
+  /**
+   * The B6 drain had no test of any kind until now, which is how a notify-only
+   * escalation came to hand back a null watermark and stay unnoticed. Round 5's T1
+   * asks for a lead notification AND the bot answering the next message; those are
+   * one requirement, because both need this drain to run.
+   */
+  it('hands the watermark back after a notify-only escalation, so the B6 drain still runs', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('can you fix this'));
+    const llm = new FakeLlmClient();
+    llm.stage({
+      match: () => true,
+      output: {
+        text: 'renata handles colour corrections, a consultation is the way in',
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'correction_lead' } }],
+      },
+    });
+    const ghl = makeGhl();
+
+    const result = await generateResponse(
+      { db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' },
+      fakeSalon,
+      'conv-1',
+    );
+
+    // Owner told, bot still live, watermark returned so the worker can re-drive.
+    // This is Round 5's T1 in full: a lead notification instead of the paused
+    // handoff it fired, and the follow-up message still gets answered.
+    expect(vi.mocked(ghl.addTag)).toHaveBeenCalledWith('contact-1', ['owner_fyi']);
+    expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
+    expect(vi.mocked(conversationsRepo.setHandoffUntil)).not.toHaveBeenCalled();
+    expect(result.latestInboundAt).not.toBeNull();
+  });
+
+  it('returns a null watermark after a pausing escalation, because a re-drive would be dropped', async () => {
+    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('i want a refund please'));
+    const llm = new FakeLlmClient();
+    llm.stage({
+      match: () => true,
+      output: {
+        text: 'let me get renata on this for you',
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'refund_request' } }],
+      },
+    });
+    const ghl = makeGhl();
+
+    const result = await generateResponse(
+      { db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' },
+      fakeSalon,
+      'conv-1',
+    );
+
+    expect(vi.mocked(ghl.addTag)).toHaveBeenCalledWith('contact-1', ['escalation_active']);
+    expect(result.latestInboundAt).toBeNull();
   });
 
   /**
@@ -397,7 +652,10 @@ describe('generateResponse — empty-output retry', () => {
       match: () => true,
       output: {
         text: "tell me what you're hoping to achieve with your hair and we can get you sorted",
-        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'client_refused_consultation_path' } }],
+        // Production fired client_refused_consultation_path here, but the
+        // two-strike guard would now drop that one on its own and the test would
+        // pass without exercising the suppression it is named after.
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'unanswered_question' } }],
       },
     });
     const ghl = makeGhl();

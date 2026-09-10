@@ -54,7 +54,7 @@ export interface EscalateInput {
   pauseBot?: boolean;
 }
 
-export async function escalateToOwner(input: EscalateInput): Promise<void> {
+export async function escalateToOwner(input: EscalateInput): Promise<{ paused: boolean }> {
   const pauseBot = input.pauseBot ?? !NOTIFY_WITHOUT_PAUSING.has(input.reason);
   const handoffUntil = new Date(Date.now() + input.salon.config.handoff_window_hours * 3600_000);
 
@@ -82,7 +82,18 @@ export async function escalateToOwner(input: EscalateInput): Promise<void> {
   // told. Notify-only carries its own tag instead.
   const tag = pauseBot ? 'escalation_active' : 'owner_fyi';
 
-  // The reason is written BEFORE the tag, and the order is the whole point.
+  // Clear the tag before anything else touches the contact.
+  //
+  // Adding a tag that is already there is not a state change, but it still fires
+  // the owner's workflow, and so does any other update to the contact while the
+  // tag sits on it. The previous escalation leaves this tag behind, so writing the
+  // reason field first meant one escalate call mutated the contact twice with the
+  // tag present. On 2026-08-31 a single voice note produced two identical
+  // notifications that way. Removing first shrinks that to one mutation, and it
+  // still guarantees the add registers as a transition.
+  await input.ghl.removeTag(input.conversation.ghlContactId, [tag]).catch(() => undefined);
+
+  // The reason is written BEFORE the tag is added, and the order is the whole point.
   //
   // The owner's notification workflow triggers on "tag added" and reads
   // last_escalation_reason to fill in its Reason line. Writing the field after the
@@ -109,11 +120,8 @@ export async function escalateToOwner(input: EscalateInput): Promise<void> {
     }
   }
 
-  // Now the tag, which is what actually notifies.
+  // Now the add, which is what actually notifies.
   try {
-    // Remove first so the add always registers as a transition, even if a
-    // previous cycle left the tag behind. GHL fires its workflow on the add.
-    await input.ghl.removeTag(input.conversation.ghlContactId, [tag]).catch(() => undefined);
     await input.ghl.addTag(input.conversation.ghlContactId, [tag]);
   } catch (err) {
     if (err instanceof GhlApiError && (err.status === 401 || err.status === 403)) {
@@ -133,4 +141,13 @@ export async function escalateToOwner(input: EscalateInput): Promise<void> {
     },
     pauseBot ? 'escalated to owner' : 'notified owner without pausing the bot',
   );
+
+  // Whether the bot actually stopped is decided HERE, from the reason, so this is
+  // the only place that can answer it. Returning it exists because the caller used
+  // to re-derive it and got it wrong: generate-response treated every escalation as
+  // a pause, so a notify-only one handed back a null watermark and the B6 drain
+  // never ran. A message that landed while the reply was being written was then
+  // never answered. Round 5 made correction_lead the common notify-only reason,
+  // which is what turned that into a failing test rather than a latent one.
+  return { paused: pauseBot };
 }

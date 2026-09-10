@@ -34,6 +34,7 @@ vi.mock('../../../src/db/repos/messages.js', () => ({
 vi.mock('../../../src/db/repos/events.js', () => ({
   insert: vi.fn().mockResolvedValue(undefined),
   recentBookingLinkSent: vi.fn().mockResolvedValue(false),
+  heldEscalationCount: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock('../../../src/db/repos/escalations.js', () => ({

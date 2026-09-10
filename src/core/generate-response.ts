@@ -49,6 +49,13 @@ const ALWAYS_PAUSE_REASONS = new Set([
   'vip_client',
 ]);
 
+/**
+ * The one reason the two-strike threshold governs. Named because it is now used
+ * in three places — the count read at the top of the turn, the guard, and the
+ * event payload — and they must never drift apart.
+ */
+const CONSULT_PUSHBACK_REASON = 'client_refused_consultation_path';
+
 const LEAKED_ESCALATION_REASONS = new Set([
   'refund_request',
   'vip_client',
@@ -157,6 +164,14 @@ export async function generateResponse(
     salon.config.booking_link_dedup_window_hours,
   );
 
+  // The two-strike threshold for a consultation objection, read once per turn.
+  // CONSULT_PUSHBACK_REASON is the only reason this counter governs.
+  const consultPushbacksHeld = await eventsRepo.heldEscalationCount(
+    deps.db,
+    conversationId,
+    CONSULT_PUSHBACK_REASON,
+  );
+
   // ── Image orchestration ─────────────────────────────────────────────────────
   // Fetch + process images for every inbound message in the recent window so the
   // LLM can see the actual pixels. OpenAI vision cache absorbs the cost of
@@ -257,6 +272,7 @@ export async function generateResponse(
     salon,
     ctx,
     bookingLinkRecentlySent,
+    consultPushbacksHeld,
     imagesByMessageId,
     unviewableImageMessageIds,
     lastAnsweredInboundAt,
@@ -334,8 +350,9 @@ export async function generateResponse(
   let carriedEscalationArgs: { reason: string; contextSummary?: string } | undefined;
   // True once an escalation intent has survived an attempt that wrote nothing.
   let escalationCarriedFromEmpty = false;
-  // Set when a carried escalation is downgraded to notify-only below.
-  let escalationDowngraded = false;
+  // Whether the escalation below actually stopped the bot. Only escalateToOwner
+  // knows, because it decides that from the reason.
+  let botPaused = false;
   const MAX_EMPTY_RETRIES = 1;
   // How long one llm_failed notification covers. A model outage hits every
   // inbound identically, so without this the owner gets an alert per message.
@@ -670,6 +687,39 @@ export async function generateResponse(
       carriedEscalationArgs = undefined;
     }
 
+    // The two-strike threshold, enforced rather than described.
+    //
+    // The prompt has asked for it in prose since Round 3: one refusal of the
+    // consultation plus one direct demand before the owner takes over. QA failed
+    // it in Rounds 3, 4 and 5, twice after it was reported fixed, and the Round 5
+    // capture is identical to the earlier two — "i literally cannot come in just
+    // to talk" handed off on the spot with reason
+    // client_refused_consultation_path. The rule is arithmetic, and arithmetic
+    // spread across a fifteen-message window is not something to ask of a model
+    // that is also writing the reply.
+    //
+    // What is counted is the MODEL's own requests to hand over, not the client's
+    // words. The model reads the whole conversation and is the right thing to
+    // judge whether someone refused; the backend is the right thing to count. An
+    // earlier attempt matched refusal phrases here with regular expressions and
+    // failed closed: any phrasing off the list left the count at zero forever, so
+    // this reason became permanently unreachable.
+    //
+    // Only this one reason is governed. A refund or a complaint has nothing to do
+    // with the consultation path and must never wait on a counter.
+    if (escalationArgs?.reason === CONSULT_PUSHBACK_REASON && consultPushbacksHeld === 0) {
+      logger.info(
+        { conversationId },
+        'first consultation pushback in this conversation; holding the escalation until the client asks again',
+      );
+      await eventsRepo.insert(deps.db, conversationId, 'escalation_held', { reason: CONSULT_PUSHBACK_REASON });
+      escalationArgs = undefined;
+      // Cleared as well, so a corrective retry cannot carry the held intent back
+      // in. The retry runs without tools and could not re-fire it anyway, but the
+      // carried path exists precisely to survive that, so it has to be cut here.
+      carriedEscalationArgs = undefined;
+    }
+
     // 1.9 tripwire — internal-vocabulary / machinery-narration net (defense in
     // depth behind Section 12 of the prompt). extractLeakedToolCalls already
     // stripped bracketed tool SYNTAX; this catches PLAIN-ENGLISH machinery the
@@ -812,14 +862,13 @@ export async function generateResponse(
     );
     const downgrade =
       escalationCarriedFromEmpty && !promisedHandoff && !ALWAYS_PAUSE_REASONS.has(escalationArgs.reason);
-    escalationDowngraded = downgrade;
     if (downgrade) {
       logger.warn(
         { conversationId, reason: escalationArgs.reason },
         'escalation carried from an empty attempt but the reply promised no handoff; notifying without pausing',
       );
     }
-    await escalateToOwner({
+    const outcome = await escalateToOwner({
       db: deps.db,
       ghl: deps.ghl,
       salon,
@@ -829,12 +878,16 @@ export async function generateResponse(
       // undefined keeps whatever the reason implies (NOTIFY_WITHOUT_PAUSING).
       pauseBot: downgrade ? false : undefined,
     });
+    botPaused = outcome.paused;
   }
 
-  // Replied successfully. If we escalated AND paused, a re-drive would just be
-  // dropped, so return null. A notify-only escalation leaves the bot running, so
-  // a message that arrived mid-processing still has to be re-driven (B6) — the
-  // watermark goes back exactly as it would on an ordinary turn.
-  const paused = escalationArgs !== undefined && !escalationDowngraded;
-  return { latestInboundAt: paused ? null : latestInboundAt };
+  // Replied successfully. A paused bot would drop a re-drive, so return null.
+  // Otherwise the watermark goes back and the worker re-drives a message that
+  // arrived mid-processing (B6).
+  //
+  // This asks escalateToOwner what it did instead of guessing, and guessing is
+  // exactly what broke: the old predicate counted every escalation as a pause, so
+  // correction_lead and every media reason suppressed the drain even though the bot
+  // was still replying.
+  return { latestInboundAt: botPaused ? null : latestInboundAt };
 }

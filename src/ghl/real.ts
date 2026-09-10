@@ -1,5 +1,6 @@
 import type { GhlClient } from './client.js';
 import { GhlApiError, OutsideMessagingWindowError, isOutsideWindowError } from './errors.js';
+import { logger } from '../lib/logger.js';
 
 const GHL_BASE_URL = 'https://services.leadconnectorhq.com';
 const GHL_API_VERSION = '2021-04-15';
@@ -50,6 +51,7 @@ export class RealGhlClient implements GhlClient {
       // 429: retry once respecting Retry-After
       if (res.status === 429 && !retried429) {
         retried429 = true;
+        logRetry(method, path, res.status);
         const retryAfter = parseInt(res.headers.get('Retry-After') ?? '1', 10);
         await sleep(Math.max(0, retryAfter * 1000));
         continue;
@@ -57,6 +59,7 @@ export class RealGhlClient implements GhlClient {
 
       // 5xx: retry with backoff
       if (res.status >= 500 && attempt < backoffMs.length) {
+        logRetry(method, path, res.status);
         await sleep(backoffMs[attempt]);
         continue;
       }
@@ -109,6 +112,21 @@ export class RealGhlClient implements GhlClient {
       customFields: [{ id: input.fieldId, value: input.value }],
     });
   }
+}
+
+/**
+ * A retry is only invisible until it duplicates something.
+ *
+ * POST /contacts/:id/tags is not safe to repeat in the way its status code
+ * suggests: adding a tag that is already there changes no state, but it still
+ * fires the owner's notification workflow a second time. If GHL applies the write
+ * and then answers 502, the retry below sends her a duplicate alert. On
+ * 2026-08-31 the owner got two identical voice-note notifications from a single
+ * escalate call, and nothing in the logs could say whether this was the cause.
+ * Now it can.
+ */
+function logRetry(method: string, path: string, status: number): void {
+  logger.warn({ method, path, status }, 'ghl request failed, retrying');
 }
 
 function sleep(ms: number): Promise<void> {

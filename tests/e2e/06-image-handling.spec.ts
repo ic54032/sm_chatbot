@@ -112,7 +112,24 @@ describe('e2e #6 — image handling', () => {
     expect(inbound[0].channel_type).toBe('image');
   });
 
-  it('inbound with video attachment escalates without LLM call', async () => {
+  /**
+   * Media tells the owner AND keeps the conversation running.
+   *
+   * This test used to assert the opposite — no LLM call, no reply, a handoff into
+   * the future — which is what the code did until QA Round 3 item 4.6. Freezing a
+   * conversation over an attachment cost leads and made the tag dishonest, because
+   * it claimed a paused bot while the bot went on replying. Round 5 scored the
+   * current behaviour as PASS on T6 and the report names it the shape T1 has to
+   * copy, so the old assertions describe behaviour a tester has signed off as
+   * wrong.
+   *
+   * The reason is unconfirmed_media_attachment rather than video_attachment
+   * because handle-inbound probes the container bytes and x.test does not resolve.
+   * A failed probe is a real production path and the honest verdict when it
+   * happens; classification with a probe that succeeds is covered in
+   * refine-media-type.spec.ts.
+   */
+  it('inbound with video attachment tells the owner without freezing the conversation', async () => {
     const fixture = JSON.parse(readFileSync(join(fixturesDir, 'salon-lumen.json'), 'utf8'));
     const salon = await salonsRepo.create(db, {
       displayName: fixture.display_name,
@@ -122,11 +139,16 @@ describe('e2e #6 — image handling', () => {
       config: fixture.config,
     });
 
-    // Stage GHL message with a video attachment — handle-inbound hard-escalates videos before
-    // reaching the respond queue, so the worker (and LLM) never see this conversation.
     testApp.ghl.stageMessage('msg-vid-1', '', [
       { url: 'https://x.test/v.mp4', type: 'video' },
     ]);
+
+    // The bot cannot open the file, so it asks what the client is after. Staging a
+    // reply at all is part of the point: the respond job must reach the worker.
+    llm.stage({
+      match: () => true,
+      output: { text: 'tell me what you are hoping to achieve with your hair and we can get you sorted' },
+    });
 
     const res = await testApp.app.inject({
       method: 'POST',
@@ -143,23 +165,41 @@ describe('e2e #6 — image handling', () => {
 
     await new Promise((r) => setTimeout(r, 1500));
 
-    // No LLM call — the hard-escalation prečac in handle-inbound short-circuits the respond queue.
-    expect(llm.calls).toHaveLength(0);
-
-    // Silent escalation: no reply goes to the client — the owner picks the
-    // conversation up personally from the escalation notification.
+    // The client is answered.
+    expect(llm.calls).toHaveLength(1);
     const log = await db.selectFrom('mock_outbound_log').selectAll().execute();
-    expect(log).toHaveLength(0);
+    expect(log).toHaveLength(1);
 
-    // Escalation row exists with reason='video_attachment'
+    // And the bot is NOT paused. A notify-only alert deliberately writes no
+    // escalations row, because that table drives auto-resume by looking for rows
+    // whose handoff has expired — with no handoff there is nothing to expire, so
+    // the row would sit active forever and never release its tag.
     const escalations = await db.selectFrom('escalations').selectAll().execute();
-    expect(escalations).toHaveLength(1);
-    expect(escalations[0].reason).toBe('video_attachment');
+    expect(escalations).toHaveLength(0);
 
-    // Conversation handoff_until is in the future
     const conversations = await db.selectFrom('conversations').selectAll().execute();
     expect(conversations).toHaveLength(1);
-    expect(conversations[0].handoff_until).not.toBeNull();
-    expect(new Date(conversations[0].handoff_until!).getTime()).toBeGreaterThan(Date.now());
+    expect(conversations[0].handoff_until).toBeNull();
+
+    // The event carries the record instead, and says it did not pause.
+    const events = await db
+      .selectFrom('conversation_events')
+      .where('event_type', '=', 'escalated_to_owner')
+      .selectAll()
+      .execute();
+    expect(events).toHaveLength(1);
+    const payload =
+      typeof events[0].payload === 'string' ? JSON.parse(events[0].payload) : events[0].payload;
+    expect(payload).toMatchObject({ reason: 'unconfirmed_media_attachment', notifyOnly: true });
+
+    // owner_fyi, never escalation_active: a tag that claims the bot is paused while
+    // it keeps replying is what Round 3 called dishonest.
+    const state = await db
+      .selectFrom('mock_contact_state')
+      .where('contact_id', '=', 'c_vid')
+      .selectAll()
+      .executeTakeFirstOrThrow();
+    expect(state.tags).toContain('owner_fyi');
+    expect(state.tags).not.toContain('escalation_active');
   });
 });

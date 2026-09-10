@@ -62,14 +62,19 @@ describe('escalateToOwner — the reason reaches GHL before the tag does', () =>
     // before. Being a race, it also passed sometimes, which is exactly why the
     // wrong reasons looked like a bug in each branch rather than one ordering
     // mistake here.
+    //
+    // The removal leads for a second reason: every contact mutation made while the
+    // tag is still present can fire the workflow, so one escalate call used to
+    // notify the owner twice.
     const order: string[] = [];
     const ghl = makeGhl();
+    vi.mocked(ghl.removeTag).mockImplementation(async () => void order.push('untag'));
     vi.mocked(ghl.updateCustomField).mockImplementation(async () => void order.push('field'));
     vi.mocked(ghl.addTag).mockImplementation(async () => void order.push('tag'));
 
     await run(ghl, 'vip_client');
 
-    expect(order).toEqual(['field', 'tag']);
+    expect(order).toEqual(['untag', 'field', 'tag']);
   });
 
   it('sends the human label, not the internal code', async () => {

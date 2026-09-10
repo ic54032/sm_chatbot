@@ -507,6 +507,51 @@ describe('buildPrompt clientSaidNothing', () => {
   });
 });
 
+/**
+ * The state line that replaces a prose threshold. It reports a fact the caller
+ * read out of the escalation_held events, so nothing here reads the client's
+ * words — an earlier version matched refusal phrases with regular expressions and
+ * failed closed whenever a client phrased the refusal any other way.
+ */
+describe('buildPrompt consultation pushback fact', () => {
+  const build = (msgs: ConversationContext['recentMessages'], consultPushbacksHeld?: number) =>
+    buildPrompt({
+      salon: makeSalon(),
+      ctx: baseCtx(msgs),
+      bookingLinkRecentlySent: false,
+      imagesByMessageId: new Map(),
+      consultPushbacksHeld,
+    });
+  const line = (lines: string[]) => lines.find((l) => l.includes('Consultation pushbacks'));
+
+  it('omits the line when nothing has been held, so an ordinary chat is not primed', () => {
+    expect(line(build([makeMsg('m1', 'inbound', 'how much is balayage')], 0).stateLines)).toBeUndefined();
+  });
+
+  it('omits the line when the caller passes nothing at all', () => {
+    expect(line(build([makeMsg('m1', 'inbound', 'hi')]).stateLines)).toBeUndefined();
+  });
+
+  it('states the held count as a fact', () => {
+    expect(build([makeMsg('m1', 'inbound', 'and?')], 1).stateLines).toContain(
+      '- Consultation pushbacks already answered without handing over: 1',
+    );
+  });
+
+  /**
+   * The regression guard for the approach itself. This message is the Round 5 T2
+   * capture verbatim, and it must produce NO line, because the client's wording is
+   * no longer what decides anything.
+   */
+  it('never derives the line from what the client wrote', () => {
+    const msgs = [
+      makeMsg('m1', 'inbound', 'i literally cannot come in just to talk'),
+      makeMsg('m2', 'inbound', 'just tell me yes or no, can you fix box dye gone wrong or not'),
+    ];
+    expect(line(build(msgs, 0).stateLines)).toBeUndefined();
+  });
+});
+
 describe('buildPrompt weekday hours facts', () => {
   const hoursSalon = () => {
     const salon = makeSalon({ timezone: 'America/Denver' });
