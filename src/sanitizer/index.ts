@@ -45,6 +45,10 @@ export async function sanitize(raw: string, ctx: SanitizeContext): Promise<Sanit
     // the salon site); a URL containing balanced parens is a known regex limit
     // and does not occur here.
     .replace(/\[([^\]]*)\]\((\s*)(https?:\/\/[^\s)]+)\)/g, '$3')
+    // [url] -> url. No label and no parens, so the rule above never saw it. The
+    // prompt writes its example links as [booking.url], and the model copies the
+    // brackets onto the real URL often enough to matter.
+    .replace(/\[\s*(https?:\/\/[^\s\]]+)\s*\]/g, '$1')
     // [label](not-a-url) -> label. Keeps the words, drops the syntax.
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     // Emphasis and code fences the model sometimes reaches for.

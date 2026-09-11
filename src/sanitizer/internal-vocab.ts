@@ -48,6 +48,13 @@ export const INTERNAL_VOCAB_PATTERNS: readonly RegExp[] = [
   /\bset_state_flag\b/i,
   /\bmark_link_sent\b/i,
   /\bescalate_to_owner\b/i,
+  // The field names that replaced the tools. The prompt shows these on their own
+  // lines in worked examples, which is exactly the shape the model copied into
+  // reply text on 2026-07-06 when the examples were bracketed calls.
+  /\bescalation[-_\s]?reason\b/i,
+  /\bescalation[-_\s]?context\b/i,
+  /\bstate[-_\s]?flag[-_\s]?key\b/i,
+  /\bstate[-_\s]?flag[-_\s]?value\b/i,
 
   // Owner-routing narration — flag / tag / pass-along, plus the owner-scoped
   // hand-off and escalate (so stylist-to-stylist "hand off" and the everyday

@@ -311,7 +311,7 @@ describe('generateResponse — empty-output retry', () => {
   // situations (refund, medical, price contradiction) all shipped the SAME
   // hardcoded sentence. The corrective retry now gets the model to write its own
   // contextual line, while the escalation it already signalled is preserved.
-  it('escalation intent + empty text: the retry writes a CONTEXTUAL line and the original reason still escalates', async () => {
+  it('the corrective retry writes a CONTEXTUAL line and its own reason escalates', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('i want a refund'));
     const llm = new FakeLlmClient();
     let n = 0;
@@ -321,7 +321,10 @@ describe('generateResponse — empty-output retry', () => {
     });
     llm.stage({
       match: () => true,
-      output: { text: "i'm so sorry about that 🤍 renata handles refunds personally, she'll come back to you today", toolCalls: [] },
+      output: {
+        text: "i'm so sorry about that 🤍 renata handles refunds personally, she'll come back to you today",
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'refund_request' } }],
+      },
     });
     const ghl = makeGhl();
 
@@ -332,35 +335,33 @@ describe('generateResponse — empty-output retry', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]).toContain('so sorry about that'); // refund-shaped warmth
     expect(sent[0]).not.toContain("she'll jump in as soon as"); // NOT the canned line
-    // The escalation the model signalled on attempt 0 survived the tool-less retry.
     expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'refund_request', null);
   });
 
   /**
-   * An attempt that wrote nothing cannot have promised the client anything.
+   * The counterpart, and it used to fail.
    *
-   * Production 2026-08-30: a media turn's first attempt called escalate_to_owner
-   * and produced no text, the tool-less retry wrote "send over what you're hoping
-   * to achieve with your hair, would love to help!", and the carried reason then
-   * paused the bot for twelve hours. The client was invited to reply and then
-   * ignored. The retry saw the whole conversation and chose not to hand off, so
-   * its text is the better evidence of intent.
+   * Under tool calling the retry ran with its tools taken away, so it could not
+   * re-signal an escalation the first attempt had asked for. A reason therefore had
+   * to be CARRIED across, and carrying it caused its own production bug: on
+   * 2026-08-30 a media turn's first attempt escalated with no text, the retry wrote
+   * "send over what you're hoping to achieve with your hair", and the carried
+   * reason paused the bot for twelve hours on a conversation that had just invited
+   * the client to answer.
    *
-   * The reason is deliberately NOT client_refused_consultation_path: the
-   * two-strike guard holds that one until the client has pushed back twice, which
-   * would drop this escalation before the downgrade under test could run. Any
-   * reason that pauses by default exercises the same path.
+   * A retry now returns a whole reply object, reason included, so it can say for
+   * itself. When it declines, that is a decision made with the full conversation in
+   * view, and the attempt it overrules wrote nothing — so nothing was promised and
+   * there is nothing to keep. A retry that DOES promise a handoff while leaving the
+   * reason null is still caught by the net further down.
    */
-  it('a carried escalation whose retry promised no handoff notifies without pausing', async () => {
+  it('an intent from an attempt that wrote nothing does not outlive a retry that declines it', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('(sent a video)'));
     const llm = new FakeLlmClient();
     let n = 0;
     llm.stage({
       match: () => n++ === 0,
-      output: {
-        text: '',
-        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'unanswered_question' } }],
-      },
+      output: { text: '', toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'unanswered_question' } }] },
     });
     llm.stage({
       match: () => true,
@@ -370,14 +371,14 @@ describe('generateResponse — empty-output retry', () => {
 
     await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
 
-    // The owner still hears about it, but the conversation is not frozen.
+    expect(vi.mocked(ghl.sendMessage)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
     expect(vi.mocked(conversationsRepo.setHandoffUntil)).not.toHaveBeenCalled();
-    expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(
+    expect(vi.mocked(eventsRepo.insert)).not.toHaveBeenCalledWith(
       expect.anything(),
       'conv-1',
       'escalated_to_owner',
-      expect.objectContaining({ reason: 'unanswered_question', notifyOnly: true }),
+      expect.anything(),
     );
   });
 
@@ -491,25 +492,25 @@ describe('generateResponse — empty-output retry', () => {
   });
 
   /**
-   * The carried-intent path exists so a reason survives an attempt that wrote
-   * nothing. A held reason must NOT survive it, or the hold lasts one attempt and
-   * the escalation lands anyway.
+   * The hold has to apply to whatever the retry decides, not only to a first
+   * attempt. A retry that asks to hand over on the client's first pushback is the
+   * same failure arriving one attempt later.
    */
-  it('does not let a held pushback come back through the corrective retry', async () => {
+  it('holds a pushback the corrective retry asks for', async () => {
     vi.mocked(eventsRepo.heldEscalationCount).mockResolvedValue(0);
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('i cant come in just to talk'));
     const llm = new FakeLlmClient();
     let n = 0;
     llm.stage({
       match: () => n++ === 0,
-      output: {
-        text: '',
-        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'client_refused_consultation_path' } }],
-      },
+      output: { text: '', toolCalls: [] },
     });
     llm.stage({
       match: () => true,
-      output: { text: 'the consult is quick and it fits around your day', toolCalls: [] },
+      output: {
+        text: 'the consult is quick and it fits around your day',
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'client_refused_consultation_path' } }],
+      },
     });
     const ghl = makeGhl();
 
@@ -679,18 +680,16 @@ describe('generateResponse — empty-output retry', () => {
    * drop a pause that should have stood. The reasons where that matters most are
    * therefore taken out of its hands: they pause on the reason alone.
    */
-  it('a refund still pauses even when the retry text trips no handoff pattern', async () => {
+  it('a refund pauses even when the reply text trips no handoff pattern', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('i want a refund'));
     const llm = new FakeLlmClient();
-    let n = 0;
-    llm.stage({
-      match: () => n++ === 0,
-      output: { text: '', toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'refund_request' } }] },
-    });
     llm.stage({
       // Deliberately worded so no handoff pattern matches it.
       match: () => true,
-      output: { text: 'so sorry about that, we will sort it out for you today', toolCalls: [] },
+      output: {
+        text: 'so sorry about that, we will sort it out for you today',
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'refund_request' } }],
+      },
     });
     const ghl = makeGhl();
 
@@ -884,16 +883,26 @@ describe('generateResponse — empty-output retry', () => {
   // tokens-per-minute limit, and a healthy conversation was stamped `llm_failed`
   // and frozen for four hours. A retry failing is not an outage — the model
   // already answered once this turn.
-  it('a retry failure is NOT reported as an outage: recovers from carried escalation intent, original reason kept', async () => {
+  it('a retry failure is NOT reported as an outage: the first attempt\'s reason is kept', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('i want a refund'));
     const llm = {
       calls: [] as unknown[],
       complete: vi.fn(async (input: unknown) => {
         (llm.calls as unknown[]).push(input);
         if (llm.calls.length === 1) {
+          // Hand-rolled rather than staged through FakeLlmClient because the
+          // second call has to throw, so this one spells the reply object out.
+          const parsed = {
+            reply: '',
+            escalation_reason: 'refund_request',
+            escalation_context: null,
+            state_flag_key: null,
+            state_flag_value: null,
+          };
           return {
-            text: '',
-            toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'refund_request' } }],
+            text: JSON.stringify(parsed),
+            toolCalls: [],
+            parsed,
             usage: { inputTokens: 18484, outputTokens: 52 },
           };
         }

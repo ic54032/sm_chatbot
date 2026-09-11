@@ -12,7 +12,7 @@ describe('loadMasterPrompt', () => {
     const prompt = loadMasterPrompt();
     expect(prompt).toContain('IDENTITY AND VOICE');
     expect(prompt).toContain('PHOTO HANDLING');
-    expect(prompt).toContain('TOOL USAGE');
+    expect(prompt).toContain('OUTPUT FORMAT AND TOOL USAGE');
     expect(prompt).toContain('PRICE QUOTING');
     // v3 sections — catch accidental loss on future prompt swaps.
     expect(prompt).toContain('IDENTITY QUESTIONS AND DISCLOSURE');
@@ -27,9 +27,15 @@ describe('loadMasterPrompt', () => {
     // Re-paste the link when the client can't find it (2026-07-11 fix).
     expect(prompt).toContain('cannot find it');
     expect(prompt).not.toContain('sent in last N messages');
-    // Anti-leak rule after the 2026-07-06 incident: bracket example notation
-    // must never be written into reply text.
-    expect(prompt).toContain('INVISIBLE native function calls');
+    // Anti-leak rule after the 2026-07-06 incident. The notation changed from
+    // bracketed calls to field names when tool calling was replaced, so the rule
+    // is now about the field names, but it guards the same failure: the model
+    // writing the prompt's own notation into the text a client reads.
+    expect(prompt).toContain('The field names belong to this prompt and to nothing else');
+    expect(prompt).toContain('reply is the only field the client ever sees');
+    // The pause contract the probe surfaced: a reason that ends the turn must not
+    // leave the client holding a question.
+    expect(prompt).toContain('Do not end it with a question');
   });
 
   it('contains the QA Round 1 Part 1 behavior fixes', () => {

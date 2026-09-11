@@ -9,6 +9,15 @@ export class AnthropicLlmClient implements LlmClient {
   }
 
   async complete(input: LlmCompleteInput): Promise<LlmCompleteOutput> {
+    // Both providers can constrain output, Anthropic through a forced tool and
+    // Gemini through responseSchema, but neither is implemented here and
+    // production runs OpenAI. Failing loudly beats returning prose the caller
+    // cannot parse, which would look like the model misbehaving rather than
+    // like a provider that was never wired up.
+    if (input.responseSchema) {
+      throw new Error('AnthropicLlmClient does not implement structured output; set LLM_PROVIDER=openai');
+    }
+
     const response = await this.client.messages.create({
       model: input.model,
       max_tokens: input.maxTokens,

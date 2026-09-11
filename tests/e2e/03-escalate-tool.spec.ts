@@ -47,7 +47,7 @@ describe('e2e #3 — escalate_to_owner tool', () => {
       match: () => true,
       output: {
         text: '',
-        toolCalls: [{ id: 't1', name: 'escalate_to_owner', arguments: { reason: 'complaint' } }],
+        toolCalls: [{ id: 't1', name: 'escalate_to_owner', arguments: { reason: 'this_salon_complaint' } }],
       },
     });
 
@@ -79,7 +79,7 @@ describe('e2e #3 — escalate_to_owner tool', () => {
       .where('conversation_id', '=', conv.id)
       .selectAll()
       .executeTakeFirstOrThrow();
-    expect(escalation.reason).toBe('complaint');
+    expect(escalation.reason).toBe('this_salon_complaint');
     expect(escalation.resumed_at).toBeNull();
 
     const state = await db
@@ -92,10 +92,8 @@ describe('e2e #3 — escalate_to_owner tool', () => {
     // why this differs from the escalations.reason asserted above. The owner reads
     // this field in a phone notification, where "sanitizer_empty_output" would mean
     // nothing to her.
-    //
-    // "complaint" is not in the label map, so escalationLabel sentence-cases it
-    // rather than leaking snake_case. That fallback is what this line pins; the
-    // mapped reasons are covered in escalation-labels.spec.ts.
-    expect((state.custom_fields as Record<string, unknown>)['field_reason']).toBe('Complaint');
+    expect((state.custom_fields as Record<string, unknown>)['field_reason']).toBe(
+      'Complaint about a recent visit',
+    );
   });
 });

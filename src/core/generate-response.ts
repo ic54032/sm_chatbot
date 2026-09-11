@@ -12,8 +12,15 @@ import { containsBookingIntent } from './detect-booking-intent.js';
 import { isRetryableLlmError, retryDelayMs } from '../llm/is-retryable.js';
 import { buildPrompt } from '../prompt/build.js';
 import { withoutImageBlocks } from '../prompt/strip-images.js';
-import { allTools } from '../prompt/tools.js';
-import { escalateToOwner } from './escalate.js';
+import {
+  RESPONSE_SCHEMA_NAME,
+  RESPONSE_JSON_SCHEMA,
+  LlmReplySchema,
+  normaliseEscalationReason,
+  isStateFlagKey,
+  type LlmReply,
+} from '../prompt/response-schema.js';
+import { escalateToOwner, NOTIFY_WITHOUT_PAUSING } from './escalate.js';
 import { containsHandoffPromise } from './detect-handoff-promise.js';
 import { extractLeakedToolCalls } from './extract-leaked-tool-calls.js';
 import { GhlApiError } from '../ghl/errors.js';
@@ -23,50 +30,12 @@ import { extractImageAttachments } from '../images/extract-attachments.js';
 import { fetchAttachment as defaultFetchAttachment } from '../images/fetch.js';
 import { processImageForVision, type ProcessedImage } from '../images/process.js';
 
-const ALLOWED_STATE_KEYS = ['client_is_hesitant', 'last_quoted_service'] as const;
-
-// The escalation reasons the master prompt defines. Reasons recovered
-// from LEAKED text-form tool calls are validated against this set (native
-// tool-call args stay free-form) so model-mangled or client-quoted text can't
-// end up in the owner's GHL last_escalation_reason field.
-/**
- * Reasons where a human genuinely has to take the conversation over, whatever the
- * reply happened to say. These always pause.
- *
- * The list exists so that a gap in handoff-promise detection cannot drop a pause
- * it should have kept. containsHandoffPromise is deliberately conservative — it
- * was built for the opposite job, catching a promise the model made WITHOUT
- * firing the tool, where a false positive costs a needless escalation. Used in
- * this direction a miss costs the opposite, so the reasons that matter most are
- * taken out of its hands entirely.
- */
-const ALWAYS_PAUSE_REASONS = new Set([
-  'refund_request',
-  'this_salon_complaint',
-  'medical_question',
-  'hostile_language',
-  'explicit_request_for_owner',
-  'vip_client',
-]);
-
 /**
  * The one reason the two-strike threshold governs. Named because it is now used
  * in three places — the count read at the top of the turn, the guard, and the
  * event payload — and they must never drift apart.
  */
 const CONSULT_PUSHBACK_REASON = 'client_refused_consultation_path';
-
-const LEAKED_ESCALATION_REASONS = new Set([
-  'refund_request',
-  'vip_client',
-  'medical_question',
-  'explicit_request_for_owner',
-  'this_salon_complaint',
-  'unanswered_question',
-  'client_refused_consultation_path',
-  'hostile_language',
-  'correction_lead',
-]);
 
 export interface GenerateResponseDeps {
   db: Db;
@@ -337,19 +306,16 @@ export async function generateResponse(
   // also empty.
   let llmResult!: Awaited<ReturnType<typeof deps.llm.complete>>;
   let escalationArgs: { reason: string; contextSummary?: string } | undefined;
-  let leakedToolCalls: ReturnType<typeof extractLeakedToolCalls>['calls'] = [];
   let sanitized!: Awaited<ReturnType<typeof sanitize>>;
   let vocabLeakRetried = false;
-  // Set only for the empty-output corrective retry: drop native tools on that one
-  // attempt so a tool-happy model physically cannot fire another tool-without-text
-  // and MUST produce a reply. Intent from the retry is still recovered via the
-  // leaked-tool-call extractor, the handoff-promise net, and the booking-intent net.
-  let forceTextRetry = false;
-  // Intent recovered on an attempt that produced NO text, carried into the
-  // corrective retry (which runs without tools and so cannot re-fire it).
-  let carriedEscalationArgs: { reason: string; contextSummary?: string } | undefined;
-  // True once an escalation intent has survived an attempt that wrote nothing.
-  let escalationCarriedFromEmpty = false;
+  // Set on either retry path, and its only job now is token discipline: a
+  // regeneration that re-sends every image puts roughly 18k tokens back on the
+  // wire seconds later and reproduces the 429 the strip-images fix exists to
+  // prevent. Nothing about intent depends on it any more — the retry returns a
+  // whole reply object of its own, including its own escalation decision.
+  let retryWithoutImages = false;
+  // Recorded for sanitize_mods, which is written after the loop.
+  let leakedSyntaxStripped = false;
   // Whether the escalation below actually stopped the bot. Only escalateToOwner
   // knows, because it decides that from the reason.
   let botPaused = false;
@@ -418,8 +384,9 @@ export async function generateResponse(
       try {
         llmResult = await deps.llm.complete({
           systemPrompt: prompt.systemPrompt,
-          messages: forceTextRetry ? withoutImageBlocks(prompt.messages) : prompt.messages,
-          tools: forceTextRetry ? [] : allTools,
+          messages: retryWithoutImages ? withoutImageBlocks(prompt.messages) : prompt.messages,
+          tools: [],
+          responseSchema: { name: RESPONSE_SCHEMA_NAME, schema: RESPONSE_JSON_SCHEMA },
           model: salon.config.llm_model ?? deps.defaultLlmModel,
           maxTokens: 512,
         });
@@ -428,7 +395,6 @@ export async function generateResponse(
           emptyAttempt,
           textLen: llmResult.text.length,
           textPreview: llmResult.text.slice(0, 200),
-          toolCalls: llmResult.toolCalls.map((c) => c.name),
           inputTokens: llmResult.usage.inputTokens,
           outputTokens: llmResult.usage.outputTokens,
         }, 'llm response received');
@@ -499,99 +465,76 @@ export async function generateResponse(
       }
     }
 
-    // GPT-4o sometimes writes tool calls as literal "[tool(...)]" text, mimicking
-    // the prompt's example notation, instead of firing native function calls
-    // (production incident 2026-07-06). Strip that syntax so the client never
-    // sees it, and keep the parsed calls so intent can be recovered below.
-    const extracted = extractLeakedToolCalls(llmResult.text);
-    const cleanedText = extracted.cleanedText;
-    leakedToolCalls = extracted.calls;
-    if (leakedToolCalls.length > 0) {
-      logger.warn(
-        { conversationId, leakedToolNames: leakedToolCalls.map((c) => c.name), textPreview: llmResult.text.slice(0, 300) },
-        'LLM wrote tool-call syntax as reply text; stripped and recovering intent',
+    // Read the reply off the object. Strict mode makes a mismatch very unlikely
+    // rather than impossible, and a refusal or a truncated response still arrive
+    // as something that is not this shape, so a failure here is treated exactly
+    // like an empty reply: the path below retries once and then answers from
+    // whatever intent was recovered. That path already exists and is already
+    // tested, which is the reason to reuse it rather than invent a third one.
+    let reply: LlmReply | null = null;
+    const validated = LlmReplySchema.safeParse(llmResult.parsed);
+    if (validated.success) {
+      reply = validated.data;
+    } else {
+      logger.error(
+        { conversationId, issues: validated.error.issues, textPreview: llmResult.text.slice(0, 300) },
+        'model response did not match the reply schema; treating it as an empty reply',
       );
     }
 
-    // Fresh intent per attempt, EXCEPT anything carried over from an attempt
-    // that produced intent but no text. The corrective retry runs with tools
-    // disabled, so it cannot re-fire escalate_to_owner or mark_link_sent —
-    // dropping the intent there would notify nobody about a refund the client
-    // was already promised.
-    escalationArgs = carriedEscalationArgs;
-    if (carriedEscalationArgs) escalationCarriedFromEmpty = true;
+    // Bracket notation still has to be stripped, and the reason is now stronger
+    // rather than weaker. The model can no longer emit a tool call, so if it
+    // drifts into "[escalate_to_owner(reason=...)]" that text lands in `reply` —
+    // the one field the client reads. It used to land there too, but alongside a
+    // real channel we could recover intent from. Now there is nothing to recover
+    // and nothing to do but make sure nobody reads it.
+    //
+    // Production 2026-07-06 is the incident this exists for, and the prompt still
+    // teaches the notation in nine worked examples until those are rewritten.
+    const extracted = extractLeakedToolCalls(reply?.reply ?? '');
+    const cleanedText = extracted.cleanedText;
+    if (extracted.calls.length > 0) {
+      leakedSyntaxStripped = true;
+      logger.warn(
+        {
+          conversationId,
+          leakedToolNames: extracted.calls.map((c) => c.name),
+          textPreview: (reply?.reply ?? '').slice(0, 300),
+        },
+        'model wrote tool-call syntax inside the reply field; stripped',
+      );
+    }
 
-    // Collect tool intentions. Defer escalate_to_owner execution until AFTER send
-    // so the LLM-generated reassurance text (e.g. "let me grab Sarah for you")
-    // reaches the client before the tag flips and the bot goes silent.
-    for (const call of llmResult.toolCalls) {
-      if (call.name === 'escalate_to_owner') {
-        const reason = (call.arguments.reason as string | undefined) ?? 'unspecified';
-        const summary = call.arguments.context_summary as string | undefined;
-        escalationArgs = { reason, contextSummary: summary };
-      } else if (call.name === 'set_state_flag') {
-        const key = call.arguments.key as string | undefined;
-        const value = call.arguments.value;
-        if (key && (ALLOWED_STATE_KEYS as readonly string[]).includes(key)) {
-          await conversationsRepo.mergeState(deps.db, conversationId, { [key]: value });
-        } else {
-          logger.warn({ conversationId, key }, 'rejected unknown state flag');
-        }
+    // Fresh every attempt. There is nothing to carry forward any more, because a
+    // retry produces its own complete object rather than prose without tools.
+    const reason = normaliseEscalationReason(reply?.escalation_reason ?? null);
+    if (reason === 'unspecified') {
+      logger.warn(
+        { conversationId, rawReason: reply?.escalation_reason },
+        'model asked for the owner with a reason outside the schema enum; notifying as unspecified',
+      );
+    }
+    escalationArgs = reason
+      ? { reason, contextSummary: reply?.escalation_context ?? undefined }
+      : undefined;
+
+    if (reply?.state_flag_key && reply.state_flag_value !== null) {
+      if (isStateFlagKey(reply.state_flag_key)) {
+        await conversationsRepo.mergeState(deps.db, conversationId, {
+          [reply.state_flag_key]: reply.state_flag_value,
+        });
       } else {
-        // A tool name outside the three registered ones (hallucinated or drifted
-        // prompt). Nothing to execute — log loudly so prompt drift is visible.
-        logger.warn({ conversationId, toolName: call.name }, 'LLM called unregistered tool; ignoring');
+        logger.warn({ conversationId, key: reply.state_flag_key }, 'rejected unknown state flag');
       }
     }
 
-    // Recover intent from text-form tool calls the model failed to fire natively.
-    // The client already read the corresponding promise ("I'm letting Renata
-    // handle this one"), so dropping the intent would strand the conversation.
-    // Leaked args are model-authored text, so unlike native args they are only
-    // trusted after validation: the reason must be one of the prompt's eight
-    // enum values (otherwise client-quoted words could end up in the owner's
-    // GHL last_escalation_reason field), and both named and positional arg
-    // shapes are accepted since leaks mimic either notation.
-    for (const leaked of leakedToolCalls) {
-      if (leaked.name === 'escalate_to_owner') {
-        if (!escalationArgs) {
-          const rawReason = typeof leaked.named.reason === 'string' ? leaked.named.reason : leaked.positional[0];
-          const reason =
-            typeof rawReason === 'string' && LEAKED_ESCALATION_REASONS.has(rawReason) ? rawReason : 'unspecified';
-          const rawSummary =
-            typeof leaked.named.context_summary === 'string'
-              ? leaked.named.context_summary
-              : typeof leaked.positional[0] === 'string' && LEAKED_ESCALATION_REASONS.has(leaked.positional[0])
-                ? leaked.positional[1]
-                : undefined;
-          escalationArgs = {
-            reason,
-            contextSummary: typeof rawSummary === 'string' ? rawSummary.slice(0, 300) : undefined,
-          };
-        }
-      } else if (leaked.name === 'set_state_flag') {
-        const key =
-          typeof leaked.named.key === 'string'
-            ? leaked.named.key
-            : typeof leaked.positional[0] === 'string'
-              ? leaked.positional[0]
-              : undefined;
-        const value = leaked.named.value ?? (typeof leaked.positional[0] === 'string' ? leaked.positional[1] : leaked.positional[0]);
-        if (key && value !== undefined && (ALLOWED_STATE_KEYS as readonly string[]).includes(key)) {
-          await conversationsRepo.mergeState(deps.db, conversationId, { [key]: value });
-        } else {
-          logger.warn({ conversationId, key }, 'rejected unknown state flag from leaked text call');
-        }
-      }
-      // Unknown names (e.g. the invented "get_started_link") need no recovery —
-      // stripping the text was the whole fix; already logged above.
-    }
-
-    // Safety net for LLM tool-call reliability: if the model wrote handoff-promise
-    // language ("let me grab Renata", "I'll let her know") but didn't fire
-    // escalate_to_owner, force the escalation anyway. The customer was already
-    // promised the owner is coming — failing to follow through breaks trust and
-    // leaves the conversation silently un-handed-off.
+    // The reply and the reason can still disagree, so the net stays.
+    //
+    // A schema cannot make a judgement correct. It guarantees escalation_reason
+    // exists; it does not guarantee the model put anything in it. A reply that
+    // promises the owner while the reason is null is the same broken promise it
+    // always was, and the client has already read it by the time we could argue
+    // about whose fault it is.
     if (!escalationArgs && containsHandoffPromise(cleanedText, salon.sourceOfTruth.salon_basics.owner_first_name)) {
       logger.warn(
         { conversationId, textPreview: cleanedText.slice(0, 200) },
@@ -632,15 +575,10 @@ export async function generateResponse(
         // The fallbacks below are meant to be a rare backstop, not the voice —
         // a refund deserves refund-shaped warmth written by the model.
         if (emptyAttempt < MAX_EMPTY_RETRIES) {
-          // Carry the intent: the retry has no tools, so it cannot re-signal an
-          // escalation the client was already promised.
-          carriedEscalationArgs = escalationArgs;
-          // Corrective retry. forceTextRetry drops native tools on the next attempt
-          // so a tool-happy model cannot fire another tool-without-text and MUST
-          // write a reply — far more reliable than prose alone. The nudge is worded
-          // so that even if the model mirrored it, no machinery vocabulary reaches
-          // the client. Append to the last user turn rather than pushing a second
-          // consecutive user message (some providers dislike consecutive same-role).
+          // The nudge is worded so that even if the model mirrored it, no machinery
+          // vocabulary reaches the client. Appended to the last user turn rather
+          // than pushed as a second consecutive user message, which some providers
+          // dislike.
           const nudge =
             '(Reminder: your last turn produced no reply text. Write your reply to the last message now, in plain words, following every rule above.)';
           const last = prompt.messages[prompt.messages.length - 1];
@@ -649,8 +587,8 @@ export async function generateResponse(
           } else {
             prompt.messages.push({ role: 'user', content: nudge });
           }
-          forceTextRetry = true;
-          logger.warn({ conversationId, emptyAttempt }, 'llm produced empty output; corrective retry (tools dropped, text forced)');
+          retryWithoutImages = true;
+          logger.warn({ conversationId, emptyAttempt }, 'llm produced an empty reply; corrective retry');
           continue outer;
         }
         // The model produced no text even with the nudge and its tools taken
@@ -684,7 +622,6 @@ export async function generateResponse(
         'client sent nothing readable this turn; dropping the escalation it signalled as stale',
       );
       escalationArgs = undefined;
-      carriedEscalationArgs = undefined;
     }
 
     // The two-strike threshold, enforced rather than described.
@@ -714,10 +651,6 @@ export async function generateResponse(
       );
       await eventsRepo.insert(deps.db, conversationId, 'escalation_held', { reason: CONSULT_PUSHBACK_REASON });
       escalationArgs = undefined;
-      // Cleared as well, so a corrective retry cannot carry the held intent back
-      // in. The retry runs without tools and could not re-fire it anyway, but the
-      // carried path exists precisely to survive that, so it has to be cut here.
-      carriedEscalationArgs = undefined;
     }
 
     // 1.9 tripwire — internal-vocabulary / machinery-narration net (defense in
@@ -737,8 +670,7 @@ export async function generateResponse(
         // regeneration re-sends every image, putting ~18k tokens back on the
         // wire a second later and reproducing the 429 that the strip-images fix
         // exists to prevent — only through this door instead.
-        carriedEscalationArgs = escalationArgs;
-        forceTextRetry = true;
+        retryWithoutImages = true;
         logger.warn(
           { conversationId, matched: vocabLeak, textPreview: sanitized.messages.join(' ').slice(0, 300) },
           'internal-vocabulary leak in client reply; regenerating (1.9 tripwire)',
@@ -759,9 +691,7 @@ export async function generateResponse(
     break outer;
   }
 
-  // Record the strip in sanitize_mods so leaked-syntax turns are queryable
-  // (ai_raw_output keeps the original text as evidence).
-  if (leakedToolCalls.length > 0) {
+  if (leakedSyntaxStripped) {
     sanitized.modifications.push('tool_call_text_stripped');
   }
   // A leak the retry cleaned up leaves no trace in the final text; record it in
@@ -840,34 +770,25 @@ export async function generateResponse(
   // After successful send, do the LLM-requested escalation. Owner gets push,
   // opens conversation, sees customer's message + bot's reassurance, takes over.
   if (escalationArgs) {
-    // A carried escalation must not freeze a conversation the client was just
-    // invited to continue.
-    //
-    // Production 2026-08-30: a media turn's first attempt called escalate_to_owner
-    // and wrote nothing, the corrective retry (which runs without tools, so it
-    // cannot reconsider) wrote "send over what you're hoping to achieve with your
-    // hair, would love to help!", and the carried reason then paused the bot for
-    // twelve hours. The client was asked a question and then ignored.
-    //
-    // The retry had the full conversation and chose not to hand off, so its text
-    // is better evidence of intent than a tool call from an attempt that produced
-    // nothing. When the two disagree, keep the notification and drop the pause:
-    // the owner still hears about it, and the bot keeps its word. This applies
-    // ONLY to a carried intent — an escalation the model made alongside real text
-    // is left exactly as it was — and never to a reason in ALWAYS_PAUSE_REASONS,
-    // so a refund or a complaint pauses on the reason alone.
-    const promisedHandoff = containsHandoffPromise(
-      sanitized.messages.join(' '),
-      salon.sourceOfTruth.salon_basics.owner_first_name,
-    );
-    const downgrade =
-      escalationCarriedFromEmpty && !promisedHandoff && !ALWAYS_PAUSE_REASONS.has(escalationArgs.reason);
-    if (downgrade) {
+    // No pauseBot override any more. It existed to undo a pause that a reason
+    // carried from a text-free attempt had imposed on a conversation the retry had
+    // just invited to continue (production 2026-08-30: a media turn paused for
+    // twelve hours right after asking the client a question). Nothing is carried
+    // now, so the reason a reply was generated with is the reason that applies,
+    // and escalateToOwner decides pausing from it.
+    // A pausing reason and a reply that invites an answer are a contradiction the
+    // client feels directly: they are asked something and then met with silence.
+    // Section 11 carries a worked example against it and Section 12 states the
+    // rule, and the 2026-09-11 probe produced it anyway on
+    // explicit_request_for_owner. Logged rather than acted on until the retest
+    // says how common it is.
+    if (!NOTIFY_WITHOUT_PAUSING.has(escalationArgs.reason) && sanitized.messages.some((m) => m.includes('?'))) {
       logger.warn(
-        { conversationId, reason: escalationArgs.reason },
-        'escalation carried from an empty attempt but the reply promised no handoff; notifying without pausing',
+        { conversationId, reason: escalationArgs.reason, textPreview: sanitized.messages.join(' ').slice(0, 200) },
+        'reply asks the client a question on a turn that pauses the bot',
       );
     }
+
     const outcome = await escalateToOwner({
       db: deps.db,
       ghl: deps.ghl,
@@ -875,8 +796,6 @@ export async function generateResponse(
       conversation: ctx.conversation,
       reason: escalationArgs.reason,
       contextSummary: escalationArgs.contextSummary,
-      // undefined keeps whatever the reason implies (NOTIFY_WITHOUT_PAUSING).
-      pauseBot: downgrade ? false : undefined,
     });
     botPaused = outcome.paused;
   }

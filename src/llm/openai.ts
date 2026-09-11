@@ -37,12 +37,53 @@ export class OpenAiLlmClient implements LlmClient {
     const response = await this.client.chat.completions.create({
       model: input.model,
       messages,
-      tools,
       max_tokens: input.maxTokens,
+      // Structured output and tools are alternatives, never both: the schema IS
+      // the whole reply, so leaving tools attached would give the model a second
+      // channel and reintroduce exactly the split it exists to remove.
+      ...(input.responseSchema
+        ? {
+            response_format: {
+              type: 'json_schema' as const,
+              json_schema: {
+                name: input.responseSchema.name,
+                strict: true,
+                schema: input.responseSchema.schema,
+              },
+            },
+          }
+        : { tools }),
     });
 
     const choice = response.choices[0];
     const text = choice.message.content ?? '';
+
+    if (input.responseSchema) {
+      // A refusal and a truncation both leave `text` unusable, and both have to be
+      // distinguishable in the log from a model that simply answered badly.
+      if (choice.message.refusal) {
+        throw new Error(`model refused the schema: ${choice.message.refusal}`);
+      }
+      if (choice.finish_reason === 'length') {
+        throw new Error(`structured reply truncated at max_tokens (${input.maxTokens})`);
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error(`structured reply was not valid JSON: ${text.slice(0, 200)}`);
+      }
+      return {
+        text,
+        toolCalls: [],
+        parsed,
+        usage: {
+          inputTokens: response.usage?.prompt_tokens ?? 0,
+          outputTokens: response.usage?.completion_tokens ?? 0,
+        },
+      };
+    }
+
     const toolCalls: ToolCall[] = (choice.message.tool_calls ?? []).map((tc) => {
       if (tc.type !== 'function') {
         return { id: tc.id, name: 'unknown', arguments: {} };

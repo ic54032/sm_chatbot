@@ -109,7 +109,19 @@ function makeGhl(): GhlClient {
   };
 }
 
-describe('generateResponse — leaked tool-call text recovery', () => {
+/**
+ * Stripping survived structured output. Recovery did not, and the difference is
+ * the whole point of this file now.
+ *
+ * The model can no longer make a tool call, so there is no intent hiding in
+ * bracket text to rescue — the reason has a field of its own. What it CAN still do
+ * is write "[escalate_to_owner(...)]" into `reply`, and `reply` is the one field
+ * the client reads, so stripping matters more than it did when the notation at
+ * least sat next to a channel we could read. Production 2026-07-06 is the incident
+ * behind every string in here, and the prompt still teaches the notation in nine
+ * worked examples until those are rewritten.
+ */
+describe('generateResponse — tool-call syntax inside the reply', () => {
   let generateResponse: (typeof import('../../../src/core/generate-response.js'))['generateResponse'];
   let conversationsRepo: typeof import('../../../src/db/repos/conversations.js');
   let messagesRepo: typeof import('../../../src/db/repos/messages.js');
@@ -126,14 +138,24 @@ describe('generateResponse — leaked tool-call text recovery', () => {
     vi.mocked(escalationsRepo.upsertActive).mockResolvedValue(undefined);
   });
 
-  it('slur incident: strips the bracket block, sends clean reassurance, and FORCES the escalation with the parsed reason', async () => {
+  it('slur incident: strips the bracket block and escalates from the reason field', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('Nigga'));
     const llm = new FakeLlmClient();
     llm.stage({
       match: () => true,
       output: {
+        // The notation lands in `reply` now, which is why stripping it is no
+        // longer only about tidiness.
         text: 'I\'m letting Renata handle this one. 🤍\n[escalate_to_owner(reason="hostile_language", context_summary="client used hostile language directed at the salon")]',
-        toolCalls: [], // native tool did NOT fire — exactly the incident
+        toolCalls: [
+          {
+            name: 'escalate_to_owner',
+            arguments: {
+              reason: 'hostile_language',
+              context_summary: 'client used hostile language directed at the salon',
+            },
+          },
+        ],
       },
     });
     const ghl = makeGhl();
@@ -211,12 +233,15 @@ describe('generateResponse — leaked tool-call text recovery', () => {
     );
   });
 
-  it('leaked [set_state_flag(...)] with an allowed key merges state', async () => {
+  it('an allowed state flag merges state', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('im nervous'));
     const llm = new FakeLlmClient();
     llm.stage({
       match: () => true,
-      output: { text: 'totally get that 🤍\n[set_state_flag("client_is_hesitant", true)]', toolCalls: [] },
+      output: {
+        text: 'totally get that 🤍',
+        toolCalls: [{ name: 'set_state_flag', arguments: { key: 'client_is_hesitant', value: true } }],
+      },
     });
     const ghl = makeGhl();
     await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
@@ -225,7 +250,9 @@ describe('generateResponse — leaked tool-call text recovery', () => {
     expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
   });
 
-  it('native escalation takes precedence over a conflicting leaked one', async () => {
+  // The reason field is now the only channel, so bracket text that disagrees with
+  // it is just text to be stripped.
+  it('the reason field wins over a conflicting reason written in the prose', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('refund now'));
     const llm = new FakeLlmClient();
     llm.stage({
@@ -246,7 +273,10 @@ describe('generateResponse — leaked tool-call text recovery', () => {
     const llm = new FakeLlmClient();
     llm.stage({
       match: () => true,
-      output: { text: '[escalate_to_owner(reason="refund_request")]', toolCalls: [] },
+      output: {
+        text: '[escalate_to_owner(reason="refund_request")]',
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'refund_request' } }],
+      },
     });
     const ghl = makeGhl();
     await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
@@ -279,31 +309,27 @@ describe('generateResponse — leaked tool-call text recovery', () => {
     expect(vi.mocked(eventsRepo.insert)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'booking_link_sent', {});
   });
 
-  it('leaked set_state_flag with a disallowed key does NOT merge state', async () => {
+  /**
+   * The JSON Schema enum keeps this out in production, so the check exists for the
+   * case the schema cannot cover: a provider that does not constrain output, or a
+   * response that arrived some other way. handoff_until is the dangerous example —
+   * a model that could set it could pause itself indefinitely.
+   */
+  it('a disallowed state flag key does NOT merge state', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('hi'));
     const llm = new FakeLlmClient();
     llm.stage({
       match: () => true,
-      output: { text: 'sure thing 🤍\n[set_state_flag("handoff_until", "2099-01-01")]', toolCalls: [] },
+      output: {
+        text: 'sure thing 🤍',
+        toolCalls: [{ name: 'set_state_flag', arguments: { key: 'handoff_until', value: '2099-01-01' } }],
+      },
     });
     const ghl = makeGhl();
     await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
 
     expect(vi.mocked(conversationsRepo.mergeState)).not.toHaveBeenCalled();
     expect(vi.mocked(escalationsRepo.upsertActive)).not.toHaveBeenCalled();
-  });
-
-  it('leaked set_state_flag in NAMED form (key="...", value=true) merges state', async () => {
-    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('im scared'));
-    const llm = new FakeLlmClient();
-    llm.stage({
-      match: () => true,
-      output: { text: 'totally get that 🤍\n[set_state_flag(key="client_is_hesitant", value=true)]', toolCalls: [] },
-    });
-    const ghl = makeGhl();
-    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
-
-    expect(vi.mocked(conversationsRepo.mergeState)).toHaveBeenCalledWith(expect.anything(), 'conv-1', { client_is_hesitant: true });
   });
 
   it('unknown NATIVE tool call is ignored without crashing the turn', async () => {
@@ -341,48 +367,28 @@ describe('generateResponse — leaked tool-call text recovery', () => {
     );
   });
 
-  it('leaked escalate with NO parseable args falls back to reason "unspecified"', async () => {
-    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('ugh'));
-    const llm = new FakeLlmClient();
-    llm.stage({
-      match: () => true,
-      output: { text: 'one sec 🤍\n[escalate_to_owner()]', toolCalls: [] },
-    });
-    const ghl = makeGhl();
-    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
-
-    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'unspecified', null);
-  });
-
-  it('leaked escalate with a NON-enum reason is sanitized to "unspecified" (no client text in GHL fields)', async () => {
+  /**
+   * The owner is still told, and what the model called it is not what she reads.
+   *
+   * "unspecified" renders as "Needs your attention", which is honest. Dropping the
+   * escalation would lose a real handoff over a spelling, and passing the string
+   * through would put model-authored text — possibly the client's own words — into
+   * her GHL reason field.
+   */
+  it('a reason outside the enum is reported as "unspecified", not passed through', async () => {
     vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('whatever'));
     const llm = new FakeLlmClient();
     llm.stage({
       match: () => true,
-      output: { text: 'one sec 🤍\n[escalate_to_owner(reason="client is a scammer lol")]', toolCalls: [] },
+      output: {
+        text: 'one sec 🤍',
+        toolCalls: [{ name: 'escalate_to_owner', arguments: { reason: 'client is a scammer lol' } }],
+      },
     });
     const ghl = makeGhl();
     await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
 
     expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'unspecified', null);
-  });
-
-  it('leaked escalate in POSITIONAL form recovers reason and summary', async () => {
-    vi.mocked(conversationsRepo.loadContext).mockResolvedValue(makeCtx('angry msg'));
-    const llm = new FakeLlmClient();
-    llm.stage({
-      match: () => true,
-      output: { text: 'one sec 🤍\n[escalate_to_owner("hostile_language", "client is angry")]', toolCalls: [] },
-    });
-    const ghl = makeGhl();
-    await generateResponse({ db: makeFakeDb(), ghl, llm, defaultLlmModel: 'fake-model' }, fakeSalon, 'conv-1');
-
-    expect(vi.mocked(escalationsRepo.upsertActive)).toHaveBeenCalledWith(
-      expect.anything(),
-      'conv-1',
-      'hostile_language',
-      'client is angry',
-    );
   });
 
   it('turn that sends the link AND escalates still records booking_link_sent (dedup window starts)', async () => {
