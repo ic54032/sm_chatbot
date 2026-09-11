@@ -119,7 +119,30 @@ describe('loadMasterPrompt', () => {
   it('the consult objection and photo observation each ship a worked example', () => {
     const prompt = loadMasterPrompt();
     expect(prompt).toContain('escalates on the first objection'); // 4.2 BAD pair
+    // Round 6 T2: the GOOD side of that pair described the reply instead of
+    // writing one, and the model invented a handoff on the first objection while
+    // every section that ships an actual sentence produced the right shape. The
+    // sentence is the fix, so it is pinned.
+    expect(prompt).toContain('works out exactly what your hair needs');
     expect(prompt).toContain('names something only THIS photo could have shown'); // 1.3 GOOD pair
+  });
+
+  /**
+   * A supplied sentence beats a rule written elsewhere, every time.
+   *
+   * The reassurance rule says to say she is picking this up "without promising
+   * when", and on 2026-09-11 two replies promised when anyway: "on this for you
+   * right away" and "get back to you on this one". Both traced to the prompt's own
+   * examples, one GOOD and one Bad, and both were near-verbatim copies. The rule
+   * was never the problem, so the examples are what this guards.
+   */
+  it('ships no example reply that promises the owner will answer by some time', () => {
+    const prompt = loadMasterPrompt();
+    const quoted = prompt.split(/\r?\n/).filter((l) => /^(?:You|Bad):\s*"/.test(l.trim()));
+    expect(quoted.length).toBeGreaterThan(5);
+    for (const line of quoted) {
+      expect(line).not.toMatch(/right away|straight away|shortly|momentarily|asap|get back to you|in a bit|in no time/i);
+    }
   });
 
   it('the prompt obeys its own style rules (no banned phrases inside bot example lines)', () => {
