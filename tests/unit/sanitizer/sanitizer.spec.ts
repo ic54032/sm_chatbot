@@ -253,3 +253,59 @@ describe('sanitizer — split must never damage the reply', () => {
     expect(result.messages[0]).toMatch(/[.!?]$/); // clean break, not mid-thought
   });
 });
+
+/**
+ * Twenty quoted example replies in the master prompt carry a [dotted.path], and
+ * until 2026-09-11 one prose rule was all that stopped them shipping verbatim.
+ * That day a client read "[salon_basics.owner_first_name] can fit it around your
+ * schedule", hours after that exact sentence was added to the prompt as a worked
+ * example. The backend knows the value, so it substitutes rather than hoping.
+ */
+describe('sanitize resolves knowledge-base placeholders', () => {
+  const sot = {
+    salon_basics: { owner_first_name: 'Renata', salon_name: 'Lumen Hair Studio' },
+    booking: { url: 'https://book.test/x' },
+    service_menu: { pricing: [{ service: 'Balayage' }] },
+  };
+  const run = (raw: string) =>
+    sanitize(raw, {
+      bookingLink: 'https://book.test/x',
+      properNouns: ['Renata', 'Lumen Hair Studio'],
+      sourceOfTruth: sot,
+      policy: { maxWordsPerMessage: 40, maxEmojis: 2 },
+    });
+
+  it('substitutes the owner name the model copied out of an example', async () => {
+    const out = await run('the consult is short and [salon_basics.owner_first_name] can fit it around your schedule');
+    expect(out.messages.join(' ')).toContain('Renata');
+    expect(out.messages.join(' ')).not.toContain('salon_basics');
+    expect(out.modifications).toContain('kb_placeholder_resolved');
+  });
+
+  // Resolved before URL extraction, so it is protected as a link from there on
+  // instead of reaching the client as bracket text where a link belonged.
+  it('turns a copied [booking.url] into the real link', async () => {
+    const out = await run('here you go: [booking.url]');
+    expect(out.messages.join(' ')).toContain('https://book.test/x');
+    expect(out.messages.join(' ')).not.toContain('[booking.url]');
+  });
+
+  it('leaves a path that resolves to something other than a string', async () => {
+    const out = await run('our prices are in [service_menu.pricing] for you');
+    expect(out.messages.join(' ')).toContain('[service_menu.pricing]');
+    expect(out.modifications).not.toContain('kb_placeholder_resolved');
+  });
+
+  it('leaves single-word brackets alone, they are not knowledge-base paths', async () => {
+    const out = await run('send me [photo] when you can');
+    expect(out.messages.join(' ')).toContain('[photo]');
+  });
+
+  it('does nothing when no knowledge base is passed', async () => {
+    const out = await sanitize('hi [salon_basics.owner_first_name]', {
+      bookingLink: 'https://book.test/x',
+      policy: { maxWordsPerMessage: 40, maxEmojis: 2 },
+    });
+    expect(out.messages.join(' ')).toContain('[salon_basics.owner_first_name]');
+  });
+});

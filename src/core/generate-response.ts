@@ -550,6 +550,7 @@ export async function generateResponse(
       sanitized = await sanitize(cleanedText, {
         bookingLink: salon.sourceOfTruth.booking.url,
         properNouns: salonProperNouns(salon),
+        sourceOfTruth: salon.sourceOfTruth as unknown as Record<string, unknown>,
         policy: {
           maxWordsPerMessage: salon.config.max_words_per_message,
           maxEmojis: salon.config.max_emojis,

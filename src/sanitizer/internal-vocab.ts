@@ -80,6 +80,12 @@ export const INTERNAL_VOCAB_PATTERNS: readonly RegExp[] = [
 
   // Bare internal process term.
   /\b(?:tool|function) call\b/i,
+
+  // A knowledge-base path the model copied out of a prompt example and the
+  // sanitizer could not resolve. Shipping "[service_menu.pricing]" to a client
+  // is the same class of failure as shipping a tool name, and by the time this
+  // runs every resolvable path has already been substituted.
+  /\[[a-z_]+(?:\.[a-z_]+)+\]/i,
 ];
 
 /**

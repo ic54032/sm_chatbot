@@ -4,6 +4,18 @@ import { applyStyleRules } from './style.js';
 
 export interface SanitizeContext {
   bookingLink: string;
+  /**
+   * The salon knowledge base, used to resolve any `[dotted.path]` the model
+   * copied out of a prompt example instead of looking it up.
+   *
+   * Twenty quoted example replies in the master prompt carry one of these, and
+   * the prompt has always relied on one prose rule to stop them shipping
+   * verbatim ("Every example line in this prompt is a PATTERN, never a script").
+   * On 2026-09-11 a client read "[salon_basics.owner_first_name] can fit it
+   * around your schedule". The backend knows every one of these values, so
+   * guessing whether the model will substitute them is the wrong job to give it.
+   */
+  sourceOfTruth?: Record<string, unknown>;
   /** Proper nouns from the salon knowledge base (salon name, stylists, brands).
    * They keep their capital when the lowercase style pass runs. */
   properNouns?: string[];
@@ -20,6 +32,21 @@ export interface SanitizeContext {
 export interface SanitizeResult {
   messages: string[];
   modifications: string[];
+}
+
+/**
+ * Walks a dotted path into the knowledge base. Returns undefined for anything
+ * that is not a plain-object hop, so a path naming an array or a missing key
+ * falls through to the leftover net rather than stringifying an object into a
+ * client's reply.
+ */
+function resolvePath(root: Record<string, unknown>, path: string): unknown {
+  let node: unknown = root;
+  for (const key of path.split('.')) {
+    if (node === null || typeof node !== 'object' || Array.isArray(node)) return undefined;
+    node = (node as Record<string, unknown>)[key];
+  }
+  return node;
 }
 
 export async function sanitize(raw: string, ctx: SanitizeContext): Promise<SanitizeResult> {
@@ -59,6 +86,24 @@ export async function sanitize(raw: string, ctx: SanitizeContext): Promise<Sanit
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')
     .replace(/^\s{0,3}[-*+]\s+/gm, '');
   if (text !== beforeMarkdown) mods.push('markdown_stripped');
+
+  // 0.5 Resolve knowledge-base placeholders the model copied verbatim.
+  //
+  //     Before URL extraction on purpose: `[booking.url]` becomes a real link
+  //     here, so the steps below protect it like any other, instead of shipping
+  //     bracket text where a link belonged.
+  //
+  //     A path is only substituted when it resolves to a string. Anything left
+  //     over is machinery reaching a client, and INTERNAL_VOCAB_PATTERNS carries
+  //     the leftover shape so the turn regenerates rather than sending it.
+  if (ctx.sourceOfTruth) {
+    const beforePaths = text;
+    text = text.replace(/\[([a-z_]+(?:\.[a-z_]+)+)\]/gi, (whole, path: string) => {
+      const value = resolvePath(ctx.sourceOfTruth as Record<string, unknown>, path);
+      return typeof value === 'string' && value.trim() !== '' ? value : whole;
+    });
+    if (text !== beforePaths) mods.push('kb_placeholder_resolved');
+  }
 
   // 1. Extract URLs first (protect them from forbidden-char scrub).
   const linkRe = /https?:\/\/\S+/g;

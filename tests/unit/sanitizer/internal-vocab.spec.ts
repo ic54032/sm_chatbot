@@ -87,3 +87,17 @@ describe('matchInternalVocab — legit casual salon speech (must NOT detect)', (
     });
   }
 });
+
+describe('an unresolved knowledge-base path is machinery', () => {
+  it('matches a dotted bracket path the sanitizer could not resolve', () => {
+    expect(matchInternalVocab('our prices are in [service_menu.pricing]')).toBeTruthy();
+  });
+
+  it('does not match an ordinary bracketed word', () => {
+    expect(matchInternalVocab('send me [photo] when you can')).toBeNull();
+  });
+
+  it('does not match a URL, which has dots but no brackets', () => {
+    expect(matchInternalVocab('here you go: https://book.test/x')).toBeNull();
+  });
+});
