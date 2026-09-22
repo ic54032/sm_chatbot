@@ -272,6 +272,20 @@ describe('loadMasterPrompt', () => {
     expect(prompt).toContain('never name a day as open unless its own line says so');
   });
 
+  /**
+   * Round 6: the prompt started answering the first objection itself, which was
+   * the fix asked for. Nothing then told the backend an objection had been used
+   * up, so its own counter stayed at zero and ate the escalation on the SECOND
+   * push, while the reply had already promised the owner. The field is how the
+   * model reports the hold it performed, so the prompt has to teach it.
+   */
+  it('tells the model to report an objection it answered without handing over', () => {
+    const prompt = loadMasterPrompt();
+    expect(prompt).toContain('consult_objection_answered');
+    // Bound to the turn it describes, not merely listed among the fields.
+    expect(prompt).toContain('set consult_objection_answered to true on that turn');
+  });
+
   it('contains the heart emoji, not the mojibake artifact', () => {
     const prompt = loadMasterPrompt();
     expect(prompt).toContain('🤍');

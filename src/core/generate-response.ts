@@ -646,12 +646,42 @@ export async function generateResponse(
     // Only this one reason is governed. A refund or a complaint has nothing to do
     // with the consultation path and must never wait on a counter.
     if (escalationArgs?.reason === CONSULT_PUSHBACK_REASON && consultPushbacksHeld === 0) {
+      // A promise already made is never taken back.
+      //
+      // The net above runs before this guard and only fires when there is no
+      // escalation, so it cannot see one this guard removes. That gap shipped the
+      // Round 6 defect: the reply said "let me grab Renata", the guard dropped the
+      // reason, and the owner was never told. Holding is only ever acceptable
+      // while the client has been promised nothing.
+      if (containsHandoffPromise(cleanedText, salon.sourceOfTruth.salon_basics.owner_first_name)) {
+        logger.warn(
+          { conversationId, textPreview: cleanedText.slice(0, 200) },
+          'first consultation pushback, but the reply promises the owner; escalating instead of holding',
+        );
+      } else {
+        logger.info(
+          { conversationId },
+          'first consultation pushback in this conversation; holding the escalation until the client asks again',
+        );
+        await eventsRepo.insert(deps.db, conversationId, 'escalation_held', { reason: CONSULT_PUSHBACK_REASON });
+        escalationArgs = undefined;
+      }
+    } else if (!escalationArgs && reply?.consult_objection_answered === true && !prompt.clientSaidNothing) {
+      // The other half of the same tally.
+      //
+      // Since 2026-09-11 the prompt answers the first objection itself, so the
+      // model asks for nothing and this guard has nothing to hold. The counter
+      // therefore stayed at zero and read the SECOND push as the first. Both locks
+      // guard one rule, so both have to be counted, and the model is the only one
+      // that can report the hold it performed.
       logger.info(
         { conversationId },
-        'first consultation pushback in this conversation; holding the escalation until the client asks again',
+        'model answered a consultation objection without handing over; counting it toward the threshold',
       );
-      await eventsRepo.insert(deps.db, conversationId, 'escalation_held', { reason: CONSULT_PUSHBACK_REASON });
-      escalationArgs = undefined;
+      await eventsRepo.insert(deps.db, conversationId, 'escalation_held', {
+        reason: CONSULT_PUSHBACK_REASON,
+        by: 'model',
+      });
     }
 
     // 1.9 tripwire — internal-vocabulary / machinery-narration net (defense in

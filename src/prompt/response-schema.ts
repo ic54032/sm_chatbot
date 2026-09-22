@@ -63,7 +63,14 @@ const nullable = (...variants: Array<Record<string, unknown>>) => ({
 export const RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
   type: 'object',
   additionalProperties: false,
-  required: ['reply', 'escalation_reason', 'escalation_context', 'state_flag_key', 'state_flag_value'],
+  required: [
+    'reply',
+    'escalation_reason',
+    'escalation_context',
+    'consult_objection_answered',
+    'state_flag_key',
+    'state_flag_value',
+  ],
   properties: {
     reply: {
       type: 'string',
@@ -72,6 +79,11 @@ export const RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
     },
     escalation_reason: nullable({ type: 'string', enum: [...MODEL_ESCALATION_REASONS] }),
     escalation_context: nullable({ type: 'string' }),
+    consult_objection_answered: nullable({
+      type: 'boolean',
+      description:
+        'True only on a turn where you answered a consultation objection warmly and did NOT hand over. It is how the backend knows this objection has been used up, so the next push goes straight to the owner. Null on every other turn.',
+    }),
     state_flag_key: nullable({ type: 'string', enum: [...STATE_FLAG_KEYS] }),
     state_flag_value: nullable({ type: 'string' }, { type: 'boolean' }),
   },
@@ -95,6 +107,11 @@ export const LlmReplySchema = z.object({
   reply: z.string(),
   escalation_reason: z.string().nullable(),
   escalation_context: z.string().nullable(),
+  // Nullish rather than nullable: strict mode makes the model send it, but a
+  // reply object assembled anywhere else (a test, an older stored row, a
+  // provider that drops an unknown field) must not fail validation over a flag
+  // whose absence simply means "no objection was answered".
+  consult_objection_answered: z.boolean().nullish(),
   state_flag_key: z.string().nullable(),
   state_flag_value: z.union([z.string(), z.boolean()]).nullable(),
 });
